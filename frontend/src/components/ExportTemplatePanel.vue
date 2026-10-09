@@ -193,8 +193,11 @@ function insertSnippet(snippet: SqlSnippet) {
   min-height: 300px;
   border: 1px solid var(--border-color);
   border-radius: 12px;
+  /*
+   * 不铺底色：模板配置面板本身只有描边，卡片再铺一层品牌色淡底，就成了
+   * 「同一页只有这块是另一种颜色」。层次靠描边与列间分隔线表达。
+   */
   overflow: hidden;
-  background: color-mix(in srgb, var(--bg-color) 88%, var(--brand-color));
 }
 
 .tpl-master__list {
@@ -203,7 +206,7 @@ function insertSnippet(snippet: SqlSnippet) {
   margin: 0;
   padding: 4px 0;
   border-right: 1px solid var(--border-color);
-  background: var(--bg-color-soft);
+  /* 列表列同样不铺底：与右侧详情列只靠一条分隔线区分 */
   overflow: auto;
 }
 
@@ -237,8 +240,8 @@ function insertSnippet(snippet: SqlSnippet) {
 }
 
 .tpl-master__item.is-active {
+  /* 选中只用底色表示，不加左侧竖条 */
   background: var(--active-bg);
-  box-shadow: inset 3px 0 0 var(--brand-color);
 }
 
 .tpl-master__name {

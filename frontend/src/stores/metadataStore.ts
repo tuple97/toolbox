@@ -11,7 +11,8 @@
  *  - `ensureXxx()` **同步**返回当前缓存（可能为空），需要时在后台发起拉取，
  *    绝不阻塞调用方——补全候选必须立刻返回，不能等网络；
  *  - `loadXxx()` 返回 Promise，供需要等待结果的界面（元数据弹窗）使用；
- *  - 刷新 = 丢掉该连接的缓存后重新拉取。
+ *  - 刷新 = 丢掉该连接的缓存后重新拉取；
+ *  - 拉取失败后进入 `META_RETRY_BACKOFF` 退避窗口，期间 `ensureXxx()` 不再自动重试。
  */
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
@@ -20,6 +21,17 @@ import type { DatabaseInfo, ExecutorColumn, TableForeignKey } from '@/types'
 
 /** 元数据缓存有效期 */
 export const META_TTL = 5 * 60 * 1000
+
+/**
+ * 拉取失败后的退避窗口：这段时间内 `ensureXxx()` 不再自动重试。
+ *
+ * 失败不能写「成功时间戳」（界面会把空数据误当成刚拉到的新数据），但什么都不记
+ * 又会让 `ensureXxx()` 在缓存未命中时于**每次按键**重发请求 —— 连接不可用时，
+ * 补全的每一次回调都会解密密码、建连、失败、把日志刷满。
+ * 窗口取短 TTL：既能止住刷屏，又不至于像成功缓存那样把用户挡 5 分钟
+ * （改好连接配置后可用 `loadXxx(..., true)` / `refreshConnection` 立即重试）。
+ */
+export const META_RETRY_BACKOFF = 30 * 1000
 
 export const useMetadataStore = defineStore('metadata', () => {
   /**
@@ -30,6 +42,7 @@ export const useMetadataStore = defineStore('metadata', () => {
    */
   const databaseInfos = ref<Record<number, DatabaseInfo[]>>({})
   const databasesFetchedAt = ref<Record<number, number>>({})
+  const databasesFailedAt = ref<Record<number, number>>({})
   const databasesLoading = ref<Record<number, boolean>>({})
 
   /** 连接 ID → 库名列表（从上面派生：补全候选与「这个库存在吗」判断用） */
@@ -42,11 +55,13 @@ export const useMetadataStore = defineStore('metadata', () => {
   /** `${connId}::${database}` → 表名列表 */
   const tables = ref<Record<string, string[]>>({})
   const tablesFetchedAt = ref<Record<string, number>>({})
+  const tablesFailedAt = ref<Record<string, number>>({})
   const tablesLoading = ref<Record<string, boolean>>({})
 
   /** `${connId}::${database}::${table}` → 字段列表 */
   const columns = ref<Record<string, ExecutorColumn[]>>({})
   const columnsFetchedAt = ref<Record<string, number>>({})
+  const columnsFailedAt = ref<Record<string, number>>({})
   const columnsLoading = ref<Record<string, boolean>>({})
 
   /**
@@ -57,6 +72,7 @@ export const useMetadataStore = defineStore('metadata', () => {
    */
   const foreignKeys = ref<Record<string, TableForeignKey[]>>({})
   const foreignKeysFetchedAt = ref<Record<string, number>>({})
+  const foreignKeysFailedAt = ref<Record<string, number>>({})
   const foreignKeysLoading = ref<Record<string, boolean>>({})
 
   /** 最近一次失败原因，界面可据此给提示 */
@@ -77,6 +93,16 @@ export const useMetadataStore = defineStore('metadata', () => {
     return Boolean(fetchedAt) && Date.now() - (fetchedAt as number) < META_TTL
   }
 
+  /** 上一次失败是否仍在退避窗口内 */
+  function inBackoff(failedAt?: number): boolean {
+    return Boolean(failedAt) && Date.now() - (failedAt as number) < META_RETRY_BACKOFF
+  }
+
+  /** 是否该自动发起一次后台拉取：缓存不新鲜、不在退避期、也没有在途请求 */
+  function shouldAutoLoad(fetchedAt?: number, failedAt?: number, loading?: boolean): boolean {
+    return !isFresh(fetchedAt) && !inBackoff(failedAt) && !loading
+  }
+
   // ------------------------------------------------------------ 库列表
 
   /** 读取库列表缓存并在需要时后台刷新；同步返回当前可见数据 */
@@ -89,8 +115,13 @@ export const useMetadataStore = defineStore('metadata', () => {
     if (!connId) {
       return []
     }
-    if (!isFresh(databasesFetchedAt.value[connId]) && !databasesLoading.value[connId]) {
-      void loadDatabases(connId)
+    if (shouldAutoLoad(
+      databasesFetchedAt.value[connId],
+      databasesFailedAt.value[connId],
+      databasesLoading.value[connId],
+    )) {
+      // 后台拉取的失败已在 load 里记进 lastError，这里吞掉以免产生未处理的 rejection
+      void loadDatabases(connId).catch(() => {})
     }
     return databaseInfos.value[connId] ?? []
   }
@@ -113,9 +144,11 @@ export const useMetadataStore = defineStore('metadata', () => {
       const infos = await fetchDatabases(connId)
       databaseInfos.value[connId] = infos
       databasesFetchedAt.value[connId] = Date.now()
+      delete databasesFailedAt.value[connId]
       return infos.map(info => info.name)
     }
     catch (e) {
+      databasesFailedAt.value[connId] = Date.now()
       lastError.value = e instanceof Error ? e.message : String(e)
       throw e
     }
@@ -137,8 +170,8 @@ export const useMetadataStore = defineStore('metadata', () => {
       return []
     }
     const key = schemaKey(connId, database)
-    if (!isFresh(tablesFetchedAt.value[key]) && !tablesLoading.value[key]) {
-      void loadTables(connId, database)
+    if (shouldAutoLoad(tablesFetchedAt.value[key], tablesFailedAt.value[key], tablesLoading.value[key])) {
+      void loadTables(connId, database).catch(() => {})
     }
     return tables.value[key] ?? []
   }
@@ -161,9 +194,11 @@ export const useMetadataStore = defineStore('metadata', () => {
       const names = await fetchTables(connId, database)
       tables.value[key] = names
       tablesFetchedAt.value[key] = Date.now()
+      delete tablesFailedAt.value[key]
       return names
     }
     catch (e) {
+      tablesFailedAt.value[key] = Date.now()
       lastError.value = e instanceof Error ? e.message : String(e)
       throw e
     }
@@ -190,8 +225,8 @@ export const useMetadataStore = defineStore('metadata', () => {
       return []
     }
     const key = tableKey(connId, database, table)
-    if (!isFresh(columnsFetchedAt.value[key]) && !columnsLoading.value[key]) {
-      void loadColumns(connId, database, table)
+    if (shouldAutoLoad(columnsFetchedAt.value[key], columnsFailedAt.value[key], columnsLoading.value[key])) {
+      void loadColumns(connId, database, table).catch(() => {})
     }
     return columns.value[key] ?? []
   }
@@ -219,9 +254,11 @@ export const useMetadataStore = defineStore('metadata', () => {
       const list = await fetchTableColumns(connId, database, table)
       columns.value[key] = list
       columnsFetchedAt.value[key] = Date.now()
+      delete columnsFailedAt.value[key]
       return list
     }
     catch (e) {
+      columnsFailedAt.value[key] = Date.now()
       lastError.value = e instanceof Error ? e.message : String(e)
       throw e
     }
@@ -243,7 +280,11 @@ export const useMetadataStore = defineStore('metadata', () => {
       return []
     }
     const key = tableKey(connId, database, table)
-    if (!isFresh(foreignKeysFetchedAt.value[key]) && !foreignKeysLoading.value[key]) {
+    if (shouldAutoLoad(
+      foreignKeysFetchedAt.value[key],
+      foreignKeysFailedAt.value[key],
+      foreignKeysLoading.value[key],
+    )) {
       void loadForeignKeys(connId, database, table)
     }
     return foreignKeys.value[key] ?? []
@@ -254,7 +295,8 @@ export const useMetadataStore = defineStore('metadata', () => {
    *
    * **失败不抛出**：外键只用于把关联条件补全得更准，没有它还有命名启发式兜底，
    * 不能因为无 information_schema 权限、方言差异之类的原因把补全链路打断 ——
-   * 失败按「这张表没有外键」缓存下来，并记进 lastError 供界面提示。
+   * 失败按「这张表没有外键」处理，记进 lastError 供界面提示，并进入退避窗口，
+   * 避免补全每敲一个字就重试一遍。
    */
   async function loadForeignKeys(
     connId: number,
@@ -277,15 +319,17 @@ export const useMetadataStore = defineStore('metadata', () => {
     try {
       const list = await fetchForeignKeys(connId, database, table)
       foreignKeys.value[key] = list
+      foreignKeysFetchedAt.value[key] = Date.now()
+      delete foreignKeysFailedAt.value[key]
       return list
     }
     catch (e) {
       lastError.value = e instanceof Error ? e.message : String(e)
+      foreignKeysFailedAt.value[key] = Date.now()
       foreignKeys.value[key] = []
       return []
     }
     finally {
-      foreignKeysFetchedAt.value[key] = Date.now()
       foreignKeysLoading.value[key] = false
     }
   }
@@ -296,24 +340,28 @@ export const useMetadataStore = defineStore('metadata', () => {
   function invalidateConnection(connId: number) {
     delete databaseInfos.value[connId]
     delete databasesFetchedAt.value[connId]
+    delete databasesFailedAt.value[connId]
 
     const schemaPrefix = `${connId}::`
     for (const key of Object.keys(tables.value)) {
       if (key.startsWith(schemaPrefix)) {
         delete tables.value[key]
         delete tablesFetchedAt.value[key]
+        delete tablesFailedAt.value[key]
       }
     }
     for (const key of Object.keys(columns.value)) {
       if (key.startsWith(schemaPrefix)) {
         delete columns.value[key]
         delete columnsFetchedAt.value[key]
+        delete columnsFailedAt.value[key]
       }
     }
     for (const key of Object.keys(foreignKeys.value)) {
       if (key.startsWith(schemaPrefix)) {
         delete foreignKeys.value[key]
         delete foreignKeysFetchedAt.value[key]
+        delete foreignKeysFailedAt.value[key]
       }
     }
   }
@@ -323,16 +371,19 @@ export const useMetadataStore = defineStore('metadata', () => {
     const prefix = `${schemaKey(connId, database)}::`
     delete tables.value[schemaKey(connId, database)]
     delete tablesFetchedAt.value[schemaKey(connId, database)]
+    delete tablesFailedAt.value[schemaKey(connId, database)]
     for (const key of Object.keys(columns.value)) {
       if (key.startsWith(prefix)) {
         delete columns.value[key]
         delete columnsFetchedAt.value[key]
+        delete columnsFailedAt.value[key]
       }
     }
     for (const key of Object.keys(foreignKeys.value)) {
       if (key.startsWith(prefix)) {
         delete foreignKeys.value[key]
         delete foreignKeysFetchedAt.value[key]
+        delete foreignKeysFailedAt.value[key]
       }
     }
   }
@@ -360,12 +411,16 @@ export const useMetadataStore = defineStore('metadata', () => {
   function clear() {
     databaseInfos.value = {}
     databasesFetchedAt.value = {}
+    databasesFailedAt.value = {}
     tables.value = {}
     tablesFetchedAt.value = {}
+    tablesFailedAt.value = {}
     columns.value = {}
     columnsFetchedAt.value = {}
+    columnsFailedAt.value = {}
     foreignKeys.value = {}
     foreignKeysFetchedAt.value = {}
+    foreignKeysFailedAt.value = {}
     lastError.value = ''
   }
 

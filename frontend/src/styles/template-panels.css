@@ -167,12 +167,51 @@
 /*
  * 代码编辑器的外壳。
  *
- * 编辑器自身背景透明（要融入所在容器），而面板卡片用的是带品牌色的淡底 ——
- * 代码区铺一层浮层底色（亮色主题即白色、暗色主题是深底）后才像一块真正的编辑区。
+ * 不铺底色：编辑器（CM6）自身背景就是透明的，页面上另一个代码区（SQL 模板编辑器）
+ * 所在的卡片也没有底色 —— 这里再铺一层浮层色，同一页里两个代码区颜色就对不上了。
+ * 编辑范围靠描边表达即可。
  */
 .tpl-panel__editor {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  background: var(--overlay-bg);
   overflow: hidden;
+}
+
+/*
+ * 编辑器标题行：左侧标题，右上角放与这个编辑器直接相关的选择器
+ * （动态选项 SQL 的「数据源 / 库 / 模式」）。
+ *
+ * 排布与 SQL 模板编辑器一致：这些选择器只影响编辑器里的补全候选，
+ * 贴着编辑器放才不用改一次候选就回上面找一趟。
+ */
+.tpl-panel__editor-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-muted);
+  font-size: var(--app-font-size-xs);
+}
+
+.tpl-panel__editor-title {
+  flex: 0 0 auto;
+}
+
+.tpl-panel__editor-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* 选择器宽度落在组件根节点上，尺寸与模板编辑器的数据源 / 库一致 */
+.tpl-panel__editor-conn {
+  width: 190px;
+}
+
+.tpl-panel__editor-db {
+  width: 160px;
 }

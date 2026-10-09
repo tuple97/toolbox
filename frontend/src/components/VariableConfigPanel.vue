@@ -2,6 +2,7 @@
 import { notify } from '@/utils/notify'
 import { computed, onMounted, ref, watch } from 'vue'
 import Button from '@/components/ui/Button.vue'
+import CodeEditor from '@/components/CodeEditor.vue'
 import Combobox from '@/components/ui/Combobox.vue'
 import ConnectionSelect from '@/components/ConnectionSelect.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -14,6 +15,7 @@ import { useConfigStore } from '@/stores/configStore'
 import { useMetadataStore } from '@/stores/metadataStore'
 import { dialectOf } from '@/utils/sql/rowSql'
 import { filterDatabaseInfos, parseShowSystemDatabases } from '@/utils/sql/sqlVisibility'
+import type { CompletionRuntime } from '@/utils/sql/sqlCompletion'
 import type { DBConnection, VariableComponent, VariableConfig, VariableDataType, VariableOption } from '@/types'
 
 const props = defineProps<{
@@ -195,6 +197,26 @@ function optionDatabase(config: VariableConfig): string {
   return config.dynamicOptions?.database || props.database || ''
 }
 
+/** 动态选项编辑器的方言：取生效连接的 dbType（没选连接时用标准 SQL） */
+function optionDbType(config: VariableConfig): string {
+  return connectionOf(optionConnId(config))?.dbType ?? ''
+}
+
+/**
+ * 动态选项 SQL 编辑器的补全上下文。
+ *
+ * 与编辑器标题行右侧的「数据源 / 库」同源：换连接、换库后候选立刻跟着变
+ * （编辑器每次查询都重新求值，不需要重建实例）。没选连接时不给 SQL 上下文，
+ * 只剩关键字与函数候选 —— 与模板编辑器未绑定连接时的表现一致。
+ */
+function optionSqlContext(config: VariableConfig): Partial<CompletionRuntime> | undefined {
+  const connId = optionConnId(config)
+  if (!connId) {
+    return undefined
+  }
+  return { sql: { connId, database: optionDatabase(config), dbType: optionDbType(config) } }
+}
+
 /** 面板里出现过的生效连接：提前拉一遍库列表，模板渲染时只读缓存 */
 const activeConnIds = computed(() => {
   const ids = new Set<number>()
@@ -363,28 +385,40 @@ async function testDynamicOptions(config: VariableConfig) {
 
               <!-- 动态选项 -->
               <template v-else>
-                <Field label="查询 SQL" label-width="76px">
-                  <Input :model-value="config.dynamicOptions?.sql ?? ''" type="textarea" :rows="3"
-                    placeholder="SELECT status AS value, status_name AS label FROM dict"
+                <!--
+                  查询 SQL 用代码编辑器（CM6，与 SQL 模板编辑器同一套补全）：
+                  表名 / 列名候选来自下面这组「数据源 + 库 / 模式」，
+                  因此把它们放在编辑器标题行右上角 —— 改完立刻影响候选，不用回上面找。
+                -->
+                <div class="tpl-panel__editor">
+                  <div class="tpl-panel__editor-head">
+                    <span class="tpl-panel__editor-title">查询 SQL</span>
+
+                    <div class="tpl-panel__editor-actions">
+                      <ConnectionSelect :model-value="sourceConnId(config)" :connections="allConnections"
+                        :clearable="true" placeholder="跟随模板当前连接" class="tpl-panel__editor-conn"
+                        title="数据源：默认跟随模板当前连接；选择后本变量固定用该连接取选项"
+                        @update:model-value="handleDataSourceChange(index, config, $event)" />
+
+                      <Combobox :model-value="databaseValue(config)" :options="databaseOptions(config)"
+                        :clearable="true" search-placeholder="搜索库 / 模式…" class="tpl-panel__editor-db"
+                        :placeholder="props.database ? `跟随模板（${props.database}）` : '跟随连接默认库'"
+                        :title="config.dynamicOptions?.database
+                          ? '本变量固定在该库 / 模式执行'
+                          : '默认跟随模板当前库；选择后本变量固定，清空即恢复跟随'"
+                        @update:model-value="handleDatabaseChange(index, config, $event)" />
+                    </div>
+                  </div>
+
+                  <CodeEditor :model-value="config.dynamicOptions?.sql ?? ''" language="sql" completion-mode="sql"
+                    height="160px" :db-type="optionDbType(config)"
+                    :completion-context="() => optionSqlContext(config)"
                     @update:model-value="updateDynamicOption(index, config, { sql: $event })" />
-                </Field>
+                </div>
 
-                <Field label="数据源" label-width="76px"
-                  hint="默认跟随模板当前连接；选择后本变量固定用该连接取选项">
-                  <ConnectionSelect :model-value="sourceConnId(config)" :connections="allConnections"
-                    :clearable="true" placeholder="跟随模板当前连接"
-                    @update:model-value="handleDataSourceChange(index, config, $event)" />
-                </Field>
-
-                <Field label="库 / 模式" label-width="76px"
-                  :hint="config.dynamicOptions?.database
-                    ? '本变量固定在该库 / 模式执行'
-                    : '默认跟随模板当前库；选择后本变量固定，清空即恢复跟随'">
-                  <Combobox :model-value="databaseValue(config)" :options="databaseOptions(config)"
-                    :clearable="true" search-placeholder="搜索库 / 模式…"
-                    :placeholder="props.database ? `跟随模板（${props.database}）` : '跟随连接默认库'"
-                    @update:model-value="handleDatabaseChange(index, config, $event)" />
-                </Field>
+                <p class="tpl-panel__hint">
+                  例：<code>SELECT status AS value, status_name AS label FROM dict</code>
+                </p>
 
                 <div class="tpl-panel__grid">
                   <Field label="值列名" label-width="76px">
@@ -424,8 +458,11 @@ async function testDynamicOptions(config: VariableConfig) {
   min-height: 300px;
   border: 1px solid var(--border-color);
   border-radius: 12px;
+  /*
+   * 不铺底色：模板配置面板本身只有描边，卡片再铺一层品牌色淡底，就成了
+   * 「同一页只有这块是另一种颜色」。层次靠描边与列间分隔线表达。
+   */
   overflow: hidden;
-  background: color-mix(in srgb, var(--bg-color) 88%, var(--brand-color));
 }
 
 .tpl-master__list {
@@ -434,7 +471,7 @@ async function testDynamicOptions(config: VariableConfig) {
   margin: 0;
   padding: 4px 0;
   border-right: 1px solid var(--border-color);
-  background: var(--bg-color-soft);
+  /* 列表列同样不铺底：与右侧详情列只靠一条分隔线区分 */
   overflow: auto;
 }
 
@@ -457,8 +494,8 @@ async function testDynamicOptions(config: VariableConfig) {
 }
 
 .tpl-master__item.is-active {
+  /* 选中只用底色表示，不加左侧竖条 */
   background: var(--active-bg);
-  box-shadow: inset 3px 0 0 var(--brand-color);
 }
 
 .tpl-master__item code {
