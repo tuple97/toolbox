@@ -1,0 +1,178 @@
+/*
+ * 模板管理弹窗内「变量配置 / 字段映射」面板的统一样式。
+ *
+ * 重要：本文件是**全局样式表**（不是 SFC 的 scoped 块），
+ * 因此不能用 `:deep()`——那是 Vue scoped CSS 的语法，在纯 CSS 里无效。
+ * 这里统一用 `.tpl-panel__*` 前缀做命名空间隔离，避免影响其他组件。
+ *
+ * 设计约定：
+ *   - 表单行由 `components/ui/Field.vue` 提供（标签左置 + 控件在右，标签宽度可传）；
+ *     **标签与控件的对齐不再由本文件负责** —— 以前那几段
+ *     `.el-form-item` / `.el-form-item__label` 的样式是在重置 Element Plus
+ *     给「上置标签」准备的行高，随组件库一起删掉了；
+ *   - 用网格自动分列，窗口越宽信息越紧凑，不再单列堆叠；
+ *   - 分组用小标题 + 虚线分隔，弱化视觉噪音。
+ */
+
+/* 收起态标题：字族名 chip + 描述 + 标记 */
+.tpl-panel__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tpl-panel__chip {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--active-bg);
+  color: var(--brand-color);
+  font-family: var(--font-mono);
+  font-size: var(--app-font-size-sm);
+  /* 相对行高：字号变大时 chip 不会被压扁 */
+  line-height: 1.5;
+}
+
+.tpl-panel__title-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-color);
+  font-size: var(--app-font-size);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------ 表单主体 */
+
+.tpl-panel__form {
+  padding: 0;
+}
+
+/* ------------------------------------------------------------ 高度链（左右两栏独立滚动） */
+
+/*
+ * 面板必须**填满页签内容区**，左右两栏的 `overflow: auto` 才有界可滚。
+ * 以前 `.tpl-master` 只有 min-height、高度随内容长 —— 超出后被外层
+ * `overflow: hidden` 裁掉，表现就是「滚动条直接没了」。
+ */
+.tpl-panel-list {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.tpl-panel-list > .tpl-master {
+  flex: 1 1 auto;
+  min-height: 200px;
+}
+
+/* ------------------------------------------------------------ 分组与网格 */
+
+.tpl-panel__group + .tpl-panel__group {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border-color);
+}
+
+.tpl-panel__group-title {
+  margin-bottom: 10px;
+  color: var(--text-muted);
+  font-size: var(--app-font-size-xs);
+  letter-spacing: 0.4px;
+}
+
+/* 分组标题行：标题在左、操作按钮在右（导出模板的「插入模板」入口） */
+.tpl-panel__group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.tpl-panel__group-head .tpl-panel__group-title {
+  margin-bottom: 0;
+}
+
+/* 分组内的说明文字：占位符写法用 code 强调 */
+.tpl-panel__hint {
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  font-size: var(--app-font-size-xs);
+  line-height: 1.6;
+}
+
+.tpl-panel__hint code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--active-bg);
+  color: var(--brand-color);
+  font-family: var(--font-mono);
+}
+
+/* 自适应分列：宽度不足时自动并成单列 */
+.tpl-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0 16px;
+}
+
+/* 静态选项列表：两列输入 + 删除按钮，行内对齐 */
+.tpl-panel__options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.tpl-panel__option-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/*
+ * 行内输入自己撑满剩余宽度；末尾的「删除」按钮保持自然宽度。
+ * （Input 单行时根节点是 div、多行时是 textarea，两种都要覆盖。）
+ */
+.tpl-panel__option-row > div,
+.tpl-panel__option-row > input,
+.tpl-panel__option-row > textarea {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 分组内的次要操作按钮 */
+.tpl-panel__actions {
+  display: flex;
+  gap: 12px;
+  margin: 2px 0 4px;
+}
+
+/*
+ * 开关类控件的外壳。
+ *
+ * 开关（20px 上下）比输入框矮，直接放进 Field 会让左侧标签与它错位；
+ * 这里按输入框高度撑开并垂直居中，于是「开关行」与同排的输入行严丝合缝。
+ */
+.tpl-panel__switch-row {
+  display: flex;
+  align-items: center;
+  min-height: calc(32px * var(--app-control-scale));
+}
+
+/*
+ * 代码编辑器的外壳。
+ *
+ * 编辑器自身背景透明（要融入所在容器），而面板卡片用的是带品牌色的淡底 ——
+ * 代码区铺一层浮层底色（亮色主题即白色、暗色主题是深底）后才像一块真正的编辑区。
+ */
+.tpl-panel__editor {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--overlay-bg);
+  overflow: hidden;
+}

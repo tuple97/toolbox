@@ -1,0 +1,15 @@
+{
+	"fixed": {
+		"file_version": "0.1.0"
+	},
+	"info": {
+		"0000": {
+			"ProductVersion": "0.1.0",
+			"CompanyName": "t97",
+			"FileDescription": "开发工具箱",
+			"LegalCopyright": "Copyright © 2026 t97",
+			"ProductName": "开发工具箱",
+			"Comments": "桌面效率工具箱"
+		}
+	}
+}

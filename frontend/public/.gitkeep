@@ -1,0 +1,5 @@
+占位文件，请勿删除。
+
+Vite 会把 public/ 的内容原样复制到 dist/，因此这里保留一份 .gitkeep，
+`pnpm build` 清空 dist 后它会回来 —— main.go 的 `//go:embed all:frontend/dist`
+要求该目录始终存在。

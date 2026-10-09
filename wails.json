@@ -1,0 +1,17 @@
+{
+  "name": "toolbox",
+  "outputfilename": "toolbox",
+  "author": {
+    "name": "t97",
+    "email": "khazan97@foxmail.com"
+  },
+  "info": {
+    "companyName": "t97",
+    "productName": "开发工具箱",
+    "productIdentifier": "com.toolbox.app",
+    "description": "开发工具箱",
+    "copyright": "Copyright © 2026 t97",
+    "comments": "开发工具箱",
+    "version": "0.1.0"
+  }
+}

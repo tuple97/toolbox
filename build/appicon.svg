@@ -1,0 +1,61 @@
+<svg width="510" height="510" viewBox="257 271 510 510" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- 盒子边框渐变 -->
+    <linearGradient id="line" x1="306" y1="286" x2="718" y2="766" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F4F8FF"/>
+      <stop offset="0.42" stop-color="#9EE7FF"/>
+      <stop offset="1" stop-color="#7C8CFF"/>
+    </linearGradient>
+
+    <!-- 命令面板描边渐变：跟随斜面边框方向，从银白 → 冷青 → 靛蓝 → 紫罗兰 -->
+    <linearGradient id="panelLine" gradientUnits="userSpaceOnUse" x1="90" y1="10" x2="10" y2="90">
+      <stop stop-color="#F4F8FF"/>
+      <stop offset="0.4" stop-color="#9EE7FF"/>
+      <stop offset="0.7" stop-color="#7C8CFF"/>
+      <stop offset="1" stop-color="#A78BFA"/>
+    </linearGradient>
+
+    <linearGradient id="faceTop" x1="306" y1="286" x2="718" y2="526" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9EE7FF" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#F4F8FF" stop-opacity="0.03"/>
+    </linearGradient>
+
+    <linearGradient id="faceLeft" x1="306" y1="406" x2="512" y2="766" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7C8CFF" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#9EE7FF" stop-opacity="0.02"/>
+    </linearGradient>
+
+    <linearGradient id="faceRight" x1="512" y1="406" x2="718" y2="766" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A78BFA" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#7C8CFF" stop-opacity="0.02"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 三个面填充 -->
+  <path d="M512 286L718 406L512 526L306 406Z" fill="url(#faceTop)"/>
+  <path d="M306 406L512 526V766L306 646Z" fill="url(#faceLeft)"/>
+  <path d="M512 526L718 406V646L512 766Z" fill="url(#faceRight)"/>
+
+  <!-- 右面：命令行窗口 -->
+  <g transform="matrix(-2.06 1.2 0 2.4 718 406)"
+     stroke="url(#panelLine)" stroke-width="2"
+     fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <!-- 窗口外框 -->
+    <path d="M 10,10 L 90,10 L 90,90 L 10,90 Z"/>
+
+    <!-- 左上角三个圆点 -->
+    <circle cx="82" cy="18" r="2.5" fill="url(#panelLine)" stroke="none"/>
+    <circle cx="74" cy="18" r="2.5" fill="url(#panelLine)" stroke="none"/>
+    <circle cx="66" cy="18" r="2.5" fill="url(#panelLine)" stroke="none"/>
+
+    <!-- 中间 </> 符号（局部坐标镜像，分段画出屏幕上的 </>） -->
+    <path d="M 60,42 L 72,50 L 60,58"/>
+    <path d="M 44,43 L 56,57"/>
+    <path d="M 40,42 L 28,50 L 40,58"/>
+  </g>
+
+  <!-- 一笔画轮廓 -->
+  <path d="M512 766 L512 526 L718 406 L512 286 L306 406 L306 646 L512 766 L718 646 L718 406 L512 526 L306 406"
+        stroke="url(#line)" stroke-width="14"
+        stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

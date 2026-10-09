@@ -1,0 +1,6 @@
+# pnpm 11+ 只从 .npmrc 读取 registry/鉴权，其余设置改到这里
+allowBuilds:
+  esbuild: true
+  vue-demi: true
+minimumReleaseAgeExclude:
+  - '@wailsio/runtime@3.0.0-beta.20'

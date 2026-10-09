@@ -1,0 +1,97 @@
+/*
+ * Tailwind 入口与设计令牌。
+ *
+ * 设计取向（替代 Element Plus 的那套观感）：
+ *  - 颜色**全部**映射到应用既有的主题变量（global.css 的 --bg-color / --text-color /
+ *    --brand-color …），于是四套配色（深蓝 / 极夜 / IDEA / 亮色）与深浅切换自动跟随，
+ *    组件里永远只写语义类名（bg-panel / text-muted / border-border）；
+ *  - 字号阶梯挂在「基准字号 × 缩放比例」上：基准 13px，其余在其上下 ±1~2px 波动，
+ *    这样「设置 → 外观 → 缩放比例」对**所有**组件（含还没迁移的 Element Plus）都生效；
+ *  - 暗色用 `html.dark` 这个既有开关（Tailwind v4 默认按系统偏好，这里改掉）。
+ *
+ * 迁移策略：新写的组件（src/components/ui/*）直接用这里的令牌与工具类，
+ * 旧页面继续用 Element Plus，两者靠同一套 CSS 变量保持视觉一致，逐页替换。
+ */
+@import 'tailwindcss';
+
+/* 暗色：跟随应用自己的 html.dark（由 configStore 按主题切换） */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  /* ---------------------------------------------------------------- 颜色 */
+  --color-bg: var(--bg-color);
+  --color-bg-soft: var(--bg-color-soft);
+  --color-surface: var(--surface-color);
+  --color-panel: var(--panel-bg);
+  --color-overlay: var(--overlay-bg);
+  --color-border: var(--border-color);
+  --color-text: var(--text-color);
+  --color-muted: var(--text-muted);
+  --color-brand: var(--brand-color);
+  --color-accent: var(--accent-color);
+  --color-danger: var(--danger-color);
+  --color-success: var(--success-color);
+  --color-warning: var(--warning-color);
+  --color-hover: var(--hover-bg);
+  --color-active: var(--active-bg);
+
+  /* ---------------------------------------------------------------- 间距 */
+  /*
+   * 间距用 rem：根字号 = 13px × 缩放比例（见下面的 @layer base），
+   * 所以 p-1 / gap-2 这些会跟着缩放比例一起放大，不需要每个组件自己算。
+   */
+  --spacing: 0.25rem;
+
+  /* ---------------------------------------------------------------- 字号 */
+  /*
+   * 字号阶梯：基准就是 --app-font-size（= 13px × 缩放），其余在其上下波动。
+   * 用 calc 表达「±N px × 缩放」而不是写死 rem，缩放时波动幅度一起放大。
+   */
+  --text-2xs: calc(var(--app-font-size) - 3px * var(--app-scale));
+  --text-xs: calc(var(--app-font-size) - 2px * var(--app-scale));
+  --text-sm: calc(var(--app-font-size) - 1px * var(--app-scale));
+  --text-base: var(--app-font-size);
+  --text-lg: calc(var(--app-font-size) + 1px * var(--app-scale));
+  --text-xl: calc(var(--app-font-size) + 2px * var(--app-scale));
+  --text-2xl: calc(var(--app-font-size) + 4px * var(--app-scale));
+  --text-3xl: calc(var(--app-font-size) + 8px * var(--app-scale));
+
+  /* ---------------------------------------------------------------- 圆角 */
+  /*
+   * 刻意**不**定义 --radius-*：Tailwind 的圆角工具类就吃这个名字，而 global.css
+   * 里已有同名变量（px 值、给历史样式用）。同名互相覆盖，指向自己还会变成循环定义。
+   * 用 Tailwind 默认的 rem 圆角即可 —— 好处是它也跟随缩放比例（12px 的卡片角，
+   * 放大到 150% 时不会显得「圆角没跟着长」）。
+   */
+
+  /* ---------------------------------------------------------------- 字体 */
+  /* 界面字体沿用应用变量；等宽字体用 Tailwind 默认栈（同样是 ui-monospace 那一串） */
+  --font-sans: var(--app-font-family);
+
+  /* ---------------------------------------------------------------- 其它 */
+  --shadow-panel: var(--shadow-md);
+}
+
+@layer base {
+  /*
+   * 根字号 = 基准 13px × 缩放比例。
+   *
+   * 这是整套缩放的地基：Tailwind 的 rem 类（字号 / 间距 / 圆角）全都跟着走，
+   * 历史样式里的 --app-font-size 阶梯也挂在同一个值上 ——
+   * 同一个倍率，界面上不会出现「一半大一半没变」。
+   */
+  html {
+    font-size: calc(13px * var(--app-scale, 1));
+  }
+
+  body {
+    /* Tailwind Preflight 把 body 字号重置成 inherit，这里显式接回应用字号 */
+    font-size: var(--app-font-size);
+  }
+
+  /* 焦点可见性：键盘导航时给一个品牌色描边，鼠标点不显示（对齐 shadcn 的做法） */
+  :focus-visible {
+    outline: 2px solid var(--accent-color);
+    outline-offset: 1px;
+  }
+}

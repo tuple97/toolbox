@@ -1,0 +1,25 @@
+{
+  "name": "toolbox",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.17.0",
+  "description": "开发工具箱（插件运行平台）：根目录是唯一的脚本入口。前端是 Vite 项目（在 frontend/），构建用时统一转发到那边执行——用 pnpm --dir 而不是 cd，是为了让 frontend/node_modules/.bin 正确进入 PATH。",
+  "scripts": {
+    "install:frontend": "pnpm --dir frontend install",
+
+    "dev": "pnpm --dir frontend exec vite",
+    "dev:app": "set \"FRONTEND_DEVSERVER_URL=http://127.0.0.1:5173\" && go run .",
+
+    "typecheck": "pnpm --dir frontend exec vue-tsc --noEmit",
+    "test": "pnpm --dir frontend exec vitest run",
+    "preview": "pnpm --dir frontend exec vite preview",
+
+    "build": "pnpm typecheck && pnpm --dir frontend exec vite build",
+    "build:app": "pnpm gen:icon && pnpm build && go build -tags production -ldflags \"-w -s -H=windowsgui\" -o build/bin/toolbox.exe",
+
+    "gen:bindings": "wails3 generate bindings",
+    "gen:icon": "wails3 generate syso -arch amd64 -icon build/windows/icon.ico -manifest build/windows/wails.exe.manifest -info build/windows/info.json -out toolbox.syso",
+
+    "set:version": "pwsh -File scripts/set-version.ps1"
+  }
+}

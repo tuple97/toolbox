@@ -1,0 +1,666 @@
+/*
+ * 主题变量。
+ * html 上带 .dark 时为暗色（默认），否则为亮色。
+ * 应用启动时由 configStore 根据后端配置切换该类名。
+ */
+:root {
+  /*
+   * 圆角：小控件用 sm、卡片/面板用 md、大容器用 lg。
+   * 整体偏克制（Linear / Vercel 风格，不用大圆角）。
+   */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  /*
+   * 间距阶梯：自定义组件的 margin / padding / gap 统一用这些，
+   * 避免各处散落魔法数字（容器骨架的固定高度仍按规范写死）。
+   */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  /* 等宽字体栈：英文走内置 Maple Mono，中文字形交给系统字体 */
+  --font-mono: "Maple Mono", Consolas, "Microsoft YaHei", monospace;
+  /*
+   * 界面字体栈，由设置面板动态写入；此处为默认值。
+   * 英文用内置 Maple Mono（离线应用不引网络字体），中文交给系统自带字体，
+   * 末尾固定中文兜底，避免出现方块。
+   */
+  --app-font-family: "Maple Mono", Consolas, "Microsoft YaHei", "PingFang SC", sans-serif;
+  /* 窗口标题栏高度，与实际标题栏组件保持一致 */
+  --titlebar-height: 48px;
+  /* 侧边栏宽度：展开 240px；收起为 64px 图标栏（见 AppSidebar.vue） */
+  --sidebar-width: 240px;
+  --sidebar-width-collapsed: 64px;
+  /*
+   * 界面缩放比例（设置 → 外观 → 缩放比例），1 = 100%，由 configStore 写到根节点上。
+   *
+   * 这是**全局尺度**：根字号 = 13px × 它（见 styles/tailwind.css 的 @layer base），
+   * 于是两套体系一起缩放 ——
+   *  1. Tailwind 的 rem 类（字号 / 间距 / 圆角）；
+   *  2. 下面的 --app-font-size 阶梯（历史样式与自绘组件都从它派生）。
+   */
+  --app-scale: 1;
+  /*
+   * 基准字号：13px。其余字号都在它上下 ±1~3px 波动（波动幅度同样乘缩放比例，
+   * 免得放大后「大标题和小字」的差距反而变小）。
+   * --app-font-size 是唯一的中间量：历史代码与 EP 都从它派生，不要绕过它写死 px。
+   */
+  --app-font-base: 13px;
+  --app-font-size: calc(var(--app-font-base) * var(--app-scale));
+  /*
+   * 派生字号：自定义组件样式请使用这些变量而不是写死 px，
+   * 否则「设置 → 外观 → 缩放比例」对它们无效。
+   */
+  --app-font-size-2xs: calc(var(--app-font-size) - 3px * var(--app-scale));
+  --app-font-size-xs: calc(var(--app-font-size) - 2px * var(--app-scale));
+  --app-font-size-sm: calc(var(--app-font-size) - 1px * var(--app-scale));
+  --app-font-size-lg: calc(var(--app-font-size) + 1px * var(--app-scale));
+  --app-font-size-xl: calc(var(--app-font-size) + 2px * var(--app-scale));
+  /*
+   * 控件大小倍率，由配置写入（历史配置项：小 0.9 / 默认 1 / 大 1.1）。
+   * 自绘控件（标题栏按钮、菜单项、标签页、面板工具行…）在「控件高度/宽度」上
+   * 显式乘它即可，如 height: calc(32px * var(--app-control-scale))；
+   * `components/ui/*` 里的组件都已经这么做了。
+   * 注意只缩放控件自身，容器高度（窗口标题栏、面板、内容区）保持固定。
+   */
+  --app-control-scale: 1;
+  /* 弹窗遮罩颜色 */
+  --app-mask: rgba(2, 6, 23, 0.45);
+  --titlebar-bg: #ffffff;
+  --panel-bg: #ffffff;
+  /*
+   * 浮层（弹窗 / 抽屉 / 消息框 / 下拉 / 右键菜单）底色：不透明。
+   *
+   * 2026-09-14 起窗口与浮层都不再透明，「背景透明度」与系统毛玻璃（Acrylic）
+   * 功能已移除；浮层与主界面之间只靠边框和阴影区分层级。
+   */
+  --overlay-bg: #ffffff;
+}
+
+/* 暗色主题 */
+html.dark {
+  /* --bg-rgb 供 rgba() 使用，支持按透明度叠加 */
+  --bg-rgb: 15 23 42;
+  --bg-color: #0f172a;
+  --bg-color-soft: #16213c;
+  --surface-color: rgba(255, 255, 255, 0.04);
+  --border-color: rgba(255, 255, 255, 0.1);
+  --text-color: #e2e8f0;
+  --text-muted: #94a3b8;
+  /* 主交互色：靛蓝（去青偏中性）；信息类强调色见 --accent-color */
+  --brand-color: #6e79f4;
+  --accent-color: #818cf8;
+  /* 兼容既有引用：--brand-color-strong 的语义已由 --accent-color 承担 */
+  --brand-color-strong: var(--accent-color);
+  --danger-color: #f87171;
+  /* 成功 / 警告语义色：自绘组件（提示条、结果行）用它们，不再借 Element Plus 的 --el-color-* */
+  --success-color: #34d399;
+  --warning-color: #fbbf24;
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --titlebar-bg: rgb(12 18 34);
+  --panel-bg: rgb(8 13 26);
+  /* 悬浮高亮：亮暗主题方向相反，统一由变量提供 */
+  --hover-bg: rgba(255, 255, 255, 0.07);
+  /* 选中/激活底色：始终取自 --brand-color 的色相（rgba(110,121,244) = #6e79f4） */
+  --active-bg: rgba(110, 121, 244, 0.16);
+  /* 右键菜单底色：不透明（菜单要求清晰） */
+  --menu-bg: rgb(var(--bg-rgb));
+  /* 弹窗底色：不透明 */
+  --overlay-bg: rgb(30 42 72);
+}
+
+/* 亮色主题 */
+html:not(.dark) {
+  --bg-rgb: 241 245 249;
+  --bg-color: #f1f5f9;
+  --bg-color-soft: #e2e8f0;
+  --surface-color: rgba(15, 23, 42, 0.03);
+  --border-color: rgba(15, 23, 42, 0.12);
+  --text-color: #1e293b;
+  --text-muted: #64748b;
+  --brand-color: #4f46e5;
+  --accent-color: #6366f1;
+  --brand-color-strong: var(--accent-color);
+  --danger-color: #dc2626;
+  /* 亮色下绿/黄要压深一档，否则在白底上「提示成功」几乎看不清 */
+  --success-color: #059669;
+  --warning-color: #d97706;
+  --shadow-md: 0 8px 24px rgba(15, 23, 42, 0.08);
+  --titlebar-bg: rgb(255 255 255);
+  --panel-bg: rgb(248 250 252);
+  --hover-bg: rgba(15, 23, 42, 0.06);
+  /* 与 --brand-color(#4f46e5 → 79,70,229) 同色调 */
+  --active-bg: rgba(79, 70, 229, 0.12);
+  --menu-bg: rgb(255 255 255);
+  --overlay-bg: rgb(255 255 255);
+  --app-mask: rgba(15, 23, 42, 0.28);
+}
+
+/*
+ * 扩展主题：在「暗色 / 亮色」两套基础变量之上，
+ * 用 html[data-theme] 覆盖配色（由 configStore 设置该属性）。
+ * 二者特异性相同，因此下面这些规则必须写在基础主题之后。
+ */
+
+/* 极夜黑：接近纯黑，对比度高 */
+html[data-theme='midnight'] {
+  --bg-rgb: 10 10 12;
+  --bg-color: #0a0a0c;
+  --bg-color-soft: #16161a;
+  --surface-color: rgba(255, 255, 255, 0.05);
+  --border-color: rgba(255, 255, 255, 0.12);
+  --text-color: #e8e8ea;
+  --text-muted: #8b8b93;
+  --brand-color: #8b93fa;
+  --accent-color: #a5b4fc;
+  --brand-color-strong: var(--accent-color);
+  --danger-color: #f87171;
+  --success-color: #34d399;
+  --warning-color: #fbbf24;
+  --titlebar-bg: rgb(14 14 16);
+  --panel-bg: rgb(18 18 21);
+  --menu-bg: rgb(var(--bg-rgb));
+  --overlay-bg: rgb(28 28 32);
+}
+
+/* IDEA Darcula 风格：经典深灰 + 橙色强调 */
+html[data-theme='idea'] {
+  --bg-rgb: 43 43 43;
+  --bg-color: #2b2b2b;
+  --bg-color-soft: #313335;
+  --surface-color: rgba(255, 255, 255, 0.05);
+  --border-color: rgba(255, 255, 255, 0.1);
+  --text-color: #d6d6d6;
+  --text-muted: #9a9a9a;
+  --brand-color: #cc7832;
+  --accent-color: #ffc66d;
+  --brand-color-strong: var(--accent-color);
+  --danger-color: #e05561;
+  /* Darcula 的绿/黄：与橙色调不打架 */
+  --success-color: #6a8759;
+  --warning-color: #ebb54a;
+  --titlebar-bg: rgb(60 63 65);
+  --panel-bg: rgb(50 52 54);
+  --menu-bg: rgb(43 43 43);
+  --overlay-bg: rgb(60 63 65);
+  --hover-bg: rgba(255, 255, 255, 0.08);
+  --active-bg: rgba(204, 120, 50, 0.18);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  color: var(--text-color);
+  /* 字体由设置面板通过 --app-font-family 控制（见 utils/fonts.ts） */
+  font-family: var(
+    --app-font-family,
+    "Maple Mono", Consolas, -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto",
+    "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
+    "Microsoft YaHei", sans-serif
+  );
+  /* 字号由设置面板通过 --app-font-size 控制 */
+  font-size: var(--app-font-size);
+  -webkit-font-smoothing: antialiased;
+
+  /* 类似原生应用：默认禁止选中文本与拖拽 */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+  /*
+   * 注意：不要把 cursor 写在 body 上。
+   * Wails 的边缘缩放通过 document.documentElement.style.cursor 设置鼠标样式，
+   * 而 body 上的 cursor 规则优先级更高，会覆盖该内联样式，导致拖拽边缘时指针不变。
+   */
+}
+
+/*
+ * 默认右键菜单全局关闭，统一使用自定义右键菜单。
+ * 输入框、文本域等需要系统菜单的场景通过 --default-contextmenu: show 单独放开；
+ * 该变量由 Wails 内置运行时读取（见 runtime/desktop/contextmenu.js）。
+ */
+:root {
+  --default-contextmenu: hide;
+}
+
+/* 允许输入类控件的文本选中与系统右键菜单 */
+input,
+textarea,
+[contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: auto;
+  --default-contextmenu: show;
+}
+
+/* 需要复制内容的区域可通过该类开放选中 */
+.selectable {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/*
+ * 主题化背景：暗色用深蓝渐变，亮色用浅灰渐变。
+ *
+ * 背景画在独立的 #app-backdrop 层上（而非 body），且始终不透明——
+ * 窗口透明与系统毛玻璃功能已移除，这一层只负责主题着色。
+ */
+#app-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+html.dark #app-backdrop {
+  background:
+    radial-gradient(1000px 600px at 15% -10%, rgba(110, 121, 244, 0.1), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(139, 147, 250, 0.12), transparent 55%),
+    rgb(var(--bg-rgb));
+}
+
+html:not(.dark) #app-backdrop {
+  background:
+    radial-gradient(1000px 600px at 15% -10%, rgba(79, 70, 229, 0.06), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(99, 102, 241, 0.05), transparent 55%),
+    rgb(var(--bg-rgb));
+}
+
+/*
+ * 唯一随包内置的字体：Maple Mono（英文 —— 拉丁字母、符号与代码）。
+ * 带 Regular / Bold 两个字重，界面上的 font-weight: 600 因此走真粗体。
+ * 中文字形不占包体，交给系统字体；字体栈由 utils/fonts.ts 按「英文, 中文, 系统兜底」拼装。
+ * 许可证见 assets/fonts/maple-mono-LICENSE.txt（SIL OFL 1.1）。
+ */
+@font-face {
+  font-family: "Maple Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../assets/fonts/maple-mono-regular.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Maple Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("../assets/fonts/maple-mono-bold.ttf") format("truetype");
+}
+
+#app {
+  height: 100vh;
+  overflow: hidden;
+  /* 内容位于背景层之上 */
+  position: relative;
+  z-index: 1;
+}
+
+.app-root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 工具栏之下的内容区域，独立滚动 */
+.app-main {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/*
+ * 应用自己的小提示（替代原生 title，见 utils/tooltip.ts）。
+ *
+ * 原生 title 的样式由系统决定、CSS 管不到，和应用的浮层观感对不上，
+ * 因此全局代理成这个元素：不透明底色（--overlay-bg）+ 边框 + 轻阴影；
+ * fixed 定位由脚本按元素位置计算，不受容器 overflow 裁切影响。
+ */
+#app-tip {
+  position: fixed;
+  z-index: 4000;
+  max-width: 340px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--overlay-bg);
+  box-shadow: var(--shadow-md);
+  color: var(--text-color);
+  font-size: var(--app-font-size-xs);
+  line-height: 1.55;
+  word-break: break-word;
+  /*
+   * 保留换行：提示内容里有 `\n` 时按行显示。
+   * 结果集的单元格提示就是多行拼的（字段值说明 + 若干条 EXPLAIN 优化建议），
+   * 不设这一条会被压成一行、挤在一起读不了。
+   */
+  white-space: pre-line;
+  pointer-events: none;
+  user-select: none;
+  animation: app-tip-in 0.12s ease-out;
+}
+
+#app-tip[hidden] {
+  display: none;
+}
+
+@keyframes app-tip-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/*
+ * 富卡片模式：提示内容是「列悬停卡片」（.column-hover，见下），它自带
+ * 底色 / 描边 / 阴影，容器让出自己的表面，避免两层边框叠在一起。
+ */
+#app-tip.app-tip--card {
+  max-width: 460px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+
+/*
+ * 列悬停卡片（DOM 由 utils/sql/columnHoverCard.ts 拼装，编辑器悬停与
+ * 结果表头悬停共用）。层次与结果表头一致：列名是主体（正文色 + 加粗 +
+ * 大一档字号），类型 / 来源表 / 注释小一档弱色，图标各带一种标识色
+ * （来源表 = 品牌色、注释 = 琥珀色，与补全候选行的图标颜色同一套约定）。
+ * 字号走主题变量：缩放比例对它生效。
+ */
+.column-hover {
+  min-width: 220px;
+  max-width: 420px;
+  padding: 10px 12px;
+  font-size: var(--app-font-size-xs);
+  line-height: 1.5;
+}
+
+.column-hover--surface {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--overlay-bg);
+  box-shadow: var(--shadow-md);
+}
+
+.column-hover__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.column-hover__name {
+  color: var(--text-color);
+  font-size: var(--app-font-size-lg);
+  font-weight: 600;
+}
+
+/* 类型跟一个等宽的完整定义（varchar(32) / decimal(10,2)），保持次要层级 */
+.column-hover__type {
+  min-width: 0;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--app-font-size-xs);
+  word-break: break-all;
+}
+
+.column-hover__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.column-hover__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: var(--app-font-size-xs);
+}
+
+.column-hover__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.column-hover__icon--table {
+  color: var(--brand-color);
+}
+
+.column-hover__icon--comment {
+  color: var(--warning-color);
+}
+
+.column-hover__value {
+  min-width: 0;
+  word-break: break-word;
+}
+
+/*
+ * 表结构卡片（DOM 由 utils/sql/hover/tableCard.ts 拼装）。
+ * 编辑器悬停时表面由 CM 的 .cm-tooltip 提供；独立浮层（.table-card-popup）自带表面。
+ * 列清单是**容器级网格**：列名 / 类型 / 描述三列跨行对齐 —— 行自身
+ * `display: contents`；每行各自开网格是跨行对不齐的（max-content 只按本行算）。
+ * 文本显式放开选择（全局默认禁选）：复制类型 / 注释是高频动作。
+ */
+.table-hover {
+  min-width: 240px;
+  max-width: 460px;
+  padding: 10px 12px;
+  font-size: var(--app-font-size-xs);
+  line-height: 1.5;
+  user-select: text;
+}
+
+.table-card-popup {
+  position: fixed;
+  z-index: 4500;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--overlay-bg);
+  box-shadow: var(--shadow-md);
+}
+
+.table-hover__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.table-hover__name {
+  color: var(--text-color);
+  font-size: var(--app-font-size-lg);
+  font-weight: 600;
+}
+
+.table-hover__copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--app-font-size-2xs);
+  cursor: pointer;
+}
+
+.table-hover__copy:hover {
+  color: var(--text-color);
+  border-color: var(--brand-color);
+}
+
+.table-hover__list {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, max-content) minmax(0, 1fr);
+  gap: 2px 10px;
+  align-items: baseline;
+  margin-top: 8px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+/* 行是「三个格子」本身：display: contents 让它把格子交给上层网格排 */
+.table-hover__row {
+  display: contents;
+}
+
+.table-hover__column {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  color: var(--text-color);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+}
+
+/* 主键 / 外键小徽标：主键金（与列头钥匙一致）、外键品牌色 */
+.table-hover__badge {
+  flex: none;
+  padding: 0 3px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  font-size: var(--app-font-size-2xs);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.table-hover__badge--pk {
+  color: var(--warning-color);
+  border-color: color-mix(in srgb, var(--warning-color) 35%, transparent);
+  background: color-mix(in srgb, var(--warning-color) 12%, transparent);
+}
+
+.table-hover__badge--fk {
+  color: var(--brand-color);
+  border-color: color-mix(in srgb, var(--brand-color) 30%, transparent);
+  background: color-mix(in srgb, var(--brand-color) 12%, transparent);
+}
+
+.table-hover__type {
+  min-width: 0;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+}
+
+.table-hover__comment {
+  min-width: 0;
+  color: var(--text-muted);
+  word-break: break-word;
+}
+
+/* 派生来源的说明（没有 DDL 可复制时占复制按钮的位置） */
+.table-hover__hint {
+  color: var(--text-muted);
+  font-size: var(--app-font-size-2xs);
+  white-space: nowrap;
+}
+
+/* 索引区块：卡片最下面一块 */
+.table-hover__indexes {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-color);
+}
+
+.table-hover__indexes-title {
+  color: var(--text-muted);
+  font-size: var(--app-font-size-2xs);
+  letter-spacing: 0.4px;
+}
+
+.table-hover__indexes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  max-height: 140px;
+  overflow: auto;
+}
+
+.table-hover__index {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: var(--app-font-size-2xs);
+}
+
+.table-hover__index-name {
+  flex: none;
+  color: var(--text-color);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.table-hover__index-unique {
+  flex: none;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--active-bg);
+  color: var(--brand-color);
+  font-size: var(--app-font-size-2xs);
+}
+
+.table-hover__index-columns {
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * 编辑器（CodeMirror 6）背景透明由 utils/logLanguage.ts 的 EditorView.theme 负责，
+ * 这里只补一条兜底：CM6 的 gutter 与 content 默认不带背景，
+ * 但容器若被其它全局规则染色，统一在这里压掉，保证融入所在容器 / 面板。
+ */
+.cm-editor,
+.cm-editor .cm-gutters,
+.cm-editor .cm-content {
+  background-color: transparent;
+}
+
+/* 滚动条美化，贴近原生观感 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 8px;
+  background: rgba(148, 163, 184, 0.35);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.55);
+  background-clip: content-box;
+}

@@ -1,0 +1,211 @@
+name: Release
+
+# 在 main 上打 tag（v1.2.3）即构建并发布 exe。
+# 资产名必须是 toolbox-windows-amd64.exe：应用内更新按「文件名含平台 + 架构」挑选资产；
+# checksums.txt 是下载校验的来源，**缺失时应用会拒绝更新**（发布契约）。
+on:
+  push:
+    tags:
+      - 'v*'
+  # 手动触发：只跑到构建与全部校验为止（不发版），方便验证流水线
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  WAILS_VERSION: v3.0.0-beta.20
+  GO_VERSION: '1.27.1'
+  NODE_VERSION: '24.16.0'
+  # pnpm 11 要求 Node >= 22.13（更低的 Node 缺 node:sqlite，install 直接失败）
+  PNPM_VERSION: 11.17.0
+  EXE_NAME: toolbox-windows-amd64.exe
+  CHECKSUM_FILE: checksums.txt
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      # 工具链自检：CI 用的是精确版本，这里核对「环境 == 项目声明的版本」。
+      # 起因：Node 低于 22.13 时 pnpm 11 要到 install 阶段才报
+      # ERR_UNKNOWN_BUILTIN_MODULE（node:sqlite），报错点离原因太远。
+      # 换版本只改上面的 env，这一步不用动。
+      - name: 检查 Go / Node / pnpm 版本
+        shell: pwsh
+        run: |
+          go version
+          node --version
+          pnpm --version
+
+          $go = ((go version) | Select-Object -First 1) -replace '^go version go([0-9][^\s]*).*$', '$1'
+          if ($go -ne $env:GO_VERSION) {
+            throw "Go 版本不一致：期望 $env:GO_VERSION，实际 $go"
+          }
+
+          $node = (node --version | Select-Object -First 1).Trim().TrimStart('v')
+          if ($node -ne $env:NODE_VERSION) {
+            throw "Node.js 版本不一致：期望 $env:NODE_VERSION，实际 $node"
+          }
+
+          $pnpm = (pnpm --version | Select-Object -First 1).Trim()
+          if ($pnpm -ne $env:PNPM_VERSION) {
+            throw "pnpm 版本不一致：期望 $env:PNPM_VERSION，实际 $pnpm"
+          }
+
+      - name: 安装前端依赖
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      # 后端检查放前面：编译 / 单测不过就没必要继续跑前端与打包
+      - name: 后端校验（格式 + vet + 单测）
+        shell: pwsh
+        run: |
+          # Windows 检出是 CRLF，而 gofmt 的输出是 LF：直接 `gofmt -l` 会把每个
+          # Go 文件都判成「未格式化」。这里按 LF 把「已入库的 Go 文件」复制到
+          # 临时目录再检查（用 git ls-files 取清单：精确，且不会扫到 node_modules），
+          # 判据只落在真实的格式问题上。
+          $temp = Join-Path ([System.IO.Path]::GetTempPath()) 'gofmt-check'
+          Remove-Item -Recurse -Force $temp -ErrorAction SilentlyContinue
+          $root = (Get-Location).Path
+          foreach ($file in git ls-files '*.go') {
+            $target = Join-Path $temp $file
+            New-Item -ItemType Directory -Force (Split-Path -Parent $target) | Out-Null
+            $text = [System.IO.File]::ReadAllText((Join-Path $root $file)) -replace "`r`n", "`n"
+            [System.IO.File]::WriteAllText($target, $text, (New-Object System.Text.UTF8Encoding $false))
+          }
+          $unformatted = gofmt -l $temp
+          if ($unformatted) {
+            $pretty = $unformatted | ForEach-Object { $_.Substring($temp.Length + 1) }
+            throw "以下文件未通过 gofmt：`n$pretty"
+          }
+
+          go vet ./...
+          go test ./...
+
+      - name: 同步版本号
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: pwsh scripts/set-version.ps1 -Version $env:GITHUB_REF_NAME
+
+      - name: 安装 Wails CLI
+        shell: pwsh
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@$env:WAILS_VERSION
+          "$env:USERPROFILE\go\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: 生成图标与清单资源
+        run: pnpm gen:icon
+
+      # 绑定是入库的：改了后端方法却忘了重新生成，CI 必须拦住。
+      # 比较时忽略行尾（--ignore-cr-at-eol）：Windows 检出的绑定是 CRLF，
+      # 而生成器写的是 LF，直接看 `git status` 会把 19 个文件全报成已修改（假阳性）。
+      - name: 校验绑定与后端一致
+        shell: pwsh
+        run: |
+          pnpm gen:bindings
+
+          $modified = git diff --ignore-cr-at-eol --name-only -- frontend/bindings
+          $untracked = git ls-files --others --exclude-standard -- frontend/bindings
+          if ($modified -or $untracked) {
+            if ($modified) {
+              Write-Host '内容与后端不一致：'
+              $modified | ForEach-Object { Write-Host "  $_" }
+              git --no-pager diff --ignore-cr-at-eol --stat -- frontend/bindings
+            }
+            if ($untracked) {
+              Write-Host '未入库（生成器新建，需要提交）：'
+              $untracked | ForEach-Object { Write-Host "  $_" }
+            }
+            throw 'frontend/bindings 与后端不一致：本地执行 pnpm gen:bindings 并提交'
+          }
+          Write-Host '绑定与后端一致'
+
+      # 前端脚本统一收敛到根 package.json，这里在仓库根执行即可
+      - name: 前端校验与构建
+        run: |
+          pnpm typecheck
+          pnpm test
+          pnpm build
+
+      - name: 构建可执行文件
+        shell: pwsh
+        run: |
+          # 版本号注入到 app.Version：应用内更新、标题栏与 --version 都以它为准
+          # （用 GITHUB_REF_NAME 环境变量而不是模板插值：避免把 ref 名当代码拼进脚本）
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { ($env:GITHUB_REF_NAME).TrimStart('v') } else { '0.0.0' }
+          New-Item -ItemType Directory -Force build/bin | Out-Null
+          go build -tags production -trimpath `
+            -ldflags "-w -s -H=windowsgui -X toolbox/app.Version=$version" `
+            -o "build/bin/$env:EXE_NAME" .
+          Write-Host "已构建 $env:EXE_NAME（版本 $version）"
+
+      - name: 生成并校验校验和
+        shell: pwsh
+        run: |
+          $exe = "build/bin/$env:EXE_NAME"
+          if (-not (Test-Path $exe)) { throw "未找到构建产物 $exe" }
+
+          # 写成无 BOM 的 UTF-8：更新器按文本解析这份清单，BOM 会干扰首行的哈希
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          $line = "$hash  $env:EXE_NAME"
+          [System.IO.File]::WriteAllText(
+            (Join-Path $PWD "build/bin/$env:CHECKSUM_FILE"),
+            $line,
+            (New-Object System.Text.UTF8Encoding $false))
+
+          # 反向校验：按清单重新解析一次，与文件实际哈希比对（发布前最后一道闸）
+          $fields = (Get-Content "build/bin/$env:CHECKSUM_FILE" -Raw).Trim() -split '\s+'
+          $listed = $fields[0]
+          $listedName = $fields[-1]
+          $actual = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          if ($listed -ne $actual) { throw "校验和不一致：清单 $listed / 实际 $actual" }
+          if ($listedName -ne $env:EXE_NAME) { throw "清单里的文件名不对：$listedName" }
+          Get-Content "build/bin/$env:CHECKSUM_FILE"
+
+      # 版本号链路的最终验收：git tag → ldflags → exe 内的 app.Version
+      - name: 校验产物版本（--version）
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path "build/bin/$env:EXE_NAME").Path
+          $expected = if ($env:GITHUB_REF_TYPE -eq 'tag') { ($env:GITHUB_REF_NAME).TrimStart('v') } else { '0.0.0' }
+          $out = Join-Path $PWD 'build/bin/version.txt'
+          # 打包版是 GUI 子系统（没有控制台）：必须重定向 stdout 才读得到
+          Start-Process -FilePath $exe -ArgumentList '--version' -Wait -NoNewWindow -RedirectStandardOutput $out
+          $actual = (Get-Content $out -Raw).Trim()
+          if ($actual -ne $expected) { throw "exe 内版本号应为 $expected，实际 $actual" }
+          Write-Host "版本校验通过：$actual"
+
+      - name: 上传构建产物（手动触发时）
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: toolbox-windows-amd64
+          path: |
+            build/bin/${{ env.EXE_NAME }}
+            build/bin/${{ env.CHECKSUM_FILE }}
+
+      - name: 发布 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/bin/${{ env.EXE_NAME }}
+            build/bin/${{ env.CHECKSUM_FILE }}
+          generate_release_notes: true
+          draft: false
