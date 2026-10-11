@@ -7,6 +7,11 @@
  *   3. 调用插件导出的 activate(api)，把宿主能力与共享 Vue 交给它；
  *   4. 插件在 activate 中通过 api.registerTool 注册界面。
  *
+ * activate 可以返回 { deactivate }：宿主在「停用 / 卸载 / 重载」插件前
+ * 会调用它，让插件释放自己持有的资源（事件订阅、定时器……）。
+ * 通过 api.registerTool / registerSettingsPanel 登记的贡献由宿主统一回收，
+ * 插件只需处理自己额外申请的东西。
+ *
  * 单个插件加载失败只影响它自己（记录错误并继续），
  * 避免一个坏插件让整个工具箱不可用。
  */
@@ -21,8 +26,21 @@ import {
 } from './registry'
 import type { InstalledPlugin } from '@/types'
 
+/**
+ * 插件返回的清理句柄。
+ *
+ * activate 返回它时，宿主会在插件停用前调用 deactivate，
+ * 用来释放插件自己申请的资源（api.host.on 的取消函数等）。
+ */
+interface PluginDeactivation {
+  deactivate: () => void | Promise<void>
+}
+
+/** activate 的返回值：可以不返回，也可以返回清理句柄 */
+type PluginActivateResult = void | PluginDeactivation
+
 /** 插件前端入口导出签名 */
-type PluginActivate = (api: unknown) => void | Promise<void>
+type PluginActivate = (api: unknown) => PluginActivateResult | Promise<PluginActivateResult>
 
 /** 插件前端模块的形状 */
 interface PluginModule {
@@ -32,6 +50,9 @@ interface PluginModule {
 
 /** 加载失败记录：插件 id → 原因 */
 const loadErrors = new Map<string, string>()
+
+/** 已加载插件登记的清理函数：插件 id → deactivate */
+const deactivations = new Map<string, () => void | Promise<void>>()
 
 /** 插件前端资源 URL 前缀（由后端提供，默认 /plugins/） */
 let assetBase = '/plugins/'
@@ -61,6 +82,8 @@ export async function initPluginHost(): Promise<void> {
 
 /** 清空并重新加载全部插件 */
 export async function reloadPluginHost(): Promise<void> {
+  // 先让已加载的插件释放自己持有的资源，再清空贡献点重新加载
+  await deactivateAllPlugins()
   clearPluginContributions()
   loadErrors.clear()
 
@@ -94,10 +117,46 @@ export async function reloadPluginHost(): Promise<void> {
   }
 }
 
-/** 卸载单个插件的前端贡献 */
-export function unloadPlugin(pluginId: string): void {
+/** 卸载单个插件：先让它释放资源，再注销其前端贡献 */
+export async function unloadPlugin(pluginId: string): Promise<void> {
+  await deactivatePlugin(pluginId)
   unregisterPluginContributions(pluginId)
   loadErrors.delete(pluginId)
+}
+
+/** 调用单个插件的 deactivate（若已登记） */
+async function deactivatePlugin(pluginId: string): Promise<void> {
+  const deactivate = deactivations.get(pluginId)
+  deactivations.delete(pluginId)
+  if (deactivate) {
+    await runDeactivation(pluginId, deactivate)
+  }
+}
+
+/** 调用并清空全部插件的 deactivate */
+async function deactivateAllPlugins(): Promise<void> {
+  const pending = [...deactivations]
+  deactivations.clear()
+  for (const [pluginId, deactivate] of pending) {
+    await runDeactivation(pluginId, deactivate)
+  }
+}
+
+/** 调用 deactivate；单个插件失败只记录，不影响其它插件 */
+async function runDeactivation(pluginId: string, deactivate: () => void | Promise<void>): Promise<void> {
+  try {
+    await deactivate()
+  }
+  catch (error) {
+    console.error(`[plugin] 释放插件资源失败: ${pluginId}`, error)
+  }
+}
+
+/** 判断 activate 的返回值是否为清理句柄 */
+function isPluginDeactivation(value: unknown): value is PluginDeactivation {
+  return typeof value === 'object'
+    && value !== null
+    && typeof (value as { deactivate?: unknown }).deactivate === 'function'
 }
 
 /** 判断插件是否需要加载前端 */
@@ -123,7 +182,14 @@ async function loadPlugin(plugin: InstalledPlugin): Promise<void> {
   }
 
   const api = createPluginApi(plugin, assetBase)
-  await activate(api)
+  const result = await activate(api)
+
+  // 插件返回 { deactivate } 时登记清理函数，留待停用/卸载/重载前调用。
+  // 覆盖旧值：同一插件重复 activate 时以最后一次登记为准。
+  if (isPluginDeactivation(result)) {
+    const { deactivate } = result
+    deactivations.set(plugin.id, () => deactivate.call(result))
+  }
 }
 
 /**

@@ -17,8 +17,15 @@ const (
 
 // Permissions 插件申请的权限集合。
 //
-// 权限是安全边界的全部依据：宿主 API 在执行动作前一律先查这里，
-// 未授予的能力直接拒绝，不做降级放行。
+// 设计原则：**协议里只保留宿主真正强制执行的能力**。
+// 每一项都必须能在 HostBridge（后端）或前端宿主 API 中找到对应的检查点，
+// 否则不允许留在协议里冒充安全机制。
+//
+// 当前已强制执行的权限：
+//   - storage：插件私有键值存储
+//   - network：HTTP 请求域名白名单（含重定向逐跳校验）
+//   - db：工具箱数据库访问
+//   - events：应用事件总线
 type Permissions struct {
 	// Network HTTP 请求域名白名单；支持通配前缀（*.example.com）
 	Network []string `json:"network,omitempty"`
@@ -28,27 +35,27 @@ type Permissions struct {
 	DB []string `json:"db,omitempty"`
 	// Events 是否允许收发应用事件总线
 	Events bool `json:"events,omitempty"`
-	// Clipboard 是否允许读写剪贴板
-	Clipboard bool `json:"clipboard,omitempty"`
-	// Notify 是否允许弹出系统/应用通知
-	Notify bool `json:"notify,omitempty"`
-	// FS 文件系统白名单（预留，当前未开放）
-	FS []string `json:"fs,omitempty"`
 }
 
 // IsZero 报告是否未申请任何权限。
 func (p Permissions) IsZero() bool {
-	return len(p.Network) == 0 && !p.Storage && len(p.DB) == 0 &&
-		!p.Events && !p.Clipboard && !p.Notify && len(p.FS) == 0
+	return len(p.Network) == 0 && !p.Storage && len(p.DB) == 0 && !p.Events
 }
 
 // Validate 校验权限声明合法性。
 func (p Permissions) Validate() error {
+	seenHost := make(map[string]struct{}, len(p.Network))
 	for _, host := range p.Network {
 		if err := validateHostPattern(host); err != nil {
 			return err
 		}
+		key := strings.ToLower(strings.TrimSpace(host))
+		if _, dup := seenHost[key]; dup {
+			return fmt.Errorf("网络白名单条目重复: %q", host)
+		}
+		seenHost[key] = struct{}{}
 	}
+
 	seen := make(map[string]struct{}, len(p.DB))
 	for _, cap := range p.DB {
 		normalized := strings.ToLower(strings.TrimSpace(cap))
@@ -149,9 +156,9 @@ func validateHostPattern(raw string) error {
 
 // PermissionSummary 用于向用户展示的权限描述列表（安装确认弹窗使用）。
 func (p Permissions) PermissionSummary() []string {
-	var items []string
+	items := make([]string, 0, 4)
 	if len(p.Network) > 0 {
-		items = append(items, fmt.Sprintf("访问网络：%s", strings.Join(p.Network, "、")))
+		items = append(items, fmt.Sprintf("访问网络：%s", strings.Join(sortedStringsFold(p.Network), "、")))
 	}
 	if p.Storage {
 		items = append(items, "读写插件私有数据")
@@ -173,15 +180,6 @@ func (p Permissions) PermissionSummary() []string {
 	if p.Events {
 		items = append(items, "收发应用事件")
 	}
-	if p.Clipboard {
-		items = append(items, "读写剪贴板")
-	}
-	if p.Notify {
-		items = append(items, "发送通知")
-	}
-	if len(p.FS) > 0 {
-		items = append(items, fmt.Sprintf("访问文件：%s", strings.Join(p.FS, "、")))
-	}
 	sort.Strings(items)
 	return items
 }
@@ -190,7 +188,7 @@ func (p Permissions) PermissionSummary() []string {
 //
 // 返回空切片表示权限未扩张，可以静默升级。
 func PermissionDiff(old, next Permissions) []string {
-	var added []string
+	added := make([]string, 0, 4)
 
 	networkBefore := make(map[string]struct{}, len(old.Network))
 	for _, h := range old.Network {
@@ -205,37 +203,29 @@ func PermissionDiff(old, next Permissions) []string {
 	if next.Storage && !old.Storage {
 		added = append(added, "新增：读写插件私有数据")
 	}
-	if len(next.DB) > 0 {
-		for _, cap := range next.DB {
-			if !old.AllowsDB(cap) {
-				added = append(added, fmt.Sprintf("新增数据库权限：%s", cap))
-			}
+	for _, cap := range next.DB {
+		if !old.AllowsDB(cap) {
+			added = append(added, fmt.Sprintf("新增数据库权限：%s", cap))
 		}
 	}
 	if next.Events && !old.Events {
 		added = append(added, "新增：收发应用事件")
-	}
-	if next.Clipboard && !old.Clipboard {
-		added = append(added, "新增：读写剪贴板")
-	}
-	if next.Notify && !old.Notify {
-		added = append(added, "新增：发送通知")
-	}
-	for _, dir := range next.FS {
-		if !containsFold(old.FS, dir) {
-			added = append(added, fmt.Sprintf("新增文件访问：%s", dir))
-		}
 	}
 
 	sort.Strings(added)
 	return added
 }
 
-func containsFold(list []string, target string) bool {
-	for _, item := range list {
-		if strings.EqualFold(strings.TrimSpace(item), strings.TrimSpace(target)) {
-			return true
-		}
-	}
-	return false
+// PermissionsEqual 报告两份权限声明是否完全一致（忽略大小写与空白差异）。
+func PermissionsEqual(a, b Permissions) bool {
+	return len(PermissionDiff(a, b)) == 0 && len(PermissionDiff(b, a)) == 0 &&
+		a.Storage == b.Storage && a.Events == b.Events
+}
+
+func sortedStringsFold(list []string) []string {
+	out := append([]string{}, list...)
+	sort.Slice(out, func(i, j int) bool {
+		return strings.ToLower(out[i]) < strings.ToLower(out[j])
+	})
+	return out
 }

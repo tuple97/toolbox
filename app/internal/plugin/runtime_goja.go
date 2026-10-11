@@ -72,9 +72,27 @@ func (r *jsRuntime) Start(_ context.Context, host *HostBridge, source []byte) er
 }
 
 // Call 调用插件注册的 handler。
-func (r *jsRuntime) Call(_ context.Context, handler string, args json.RawMessage) (json.RawMessage, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+//
+// 并发安全：goja 的 Runtime 只能串行使用，因此外部并发调用会排队。
+// 但同一条调用栈上的重入（A→B→A）不能再次加锁，否则会自己锁死自己，
+// 这里用 context 中的调用栈追踪区分这两种情况。
+func (r *jsRuntime) Call(ctx context.Context, handler string, args json.RawMessage) (json.RawMessage, error) {
+	pluginID := ""
+	trace := CallTraceFrom(ctx)
+	if r.host != nil {
+		pluginID = r.host.PluginID()
+	}
+
+	// 已有调用栈且本插件已在其上：直接重入，不再加锁（否则自己锁死自己）
+	reentrant := false
+	if trace != nil && pluginID != "" {
+		reentrant = trace.Enter(pluginID)
+		defer trace.Exit(pluginID)
+	}
+	if !reentrant {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+	}
 
 	if r.closed {
 		return nil, fmt.Errorf("插件运行时已关闭")
@@ -92,6 +110,14 @@ func (r *jsRuntime) Call(_ context.Context, handler string, args json.RawMessage
 	}
 	if payload == nil {
 		payload = map[string]any{}
+	}
+
+	// 让插件内部的 toolbox.plugins.call 能带上当前调用栈。
+	// 用「保存-恢复」而不是置空：嵌套重入时外层执行还要继续用到它。
+	if r.host != nil {
+		previous := r.host.currentTrace()
+		r.host.setCallTrace(trace)
+		defer r.host.setCallTrace(previous)
 	}
 
 	stop := watchDog(r.vm, jsCallTimeout, "插件处理超时")

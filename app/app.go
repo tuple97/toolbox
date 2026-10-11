@@ -204,11 +204,12 @@ func (a *App) init() error {
 	a.dbService = services.NewDBService(repo, cipher, engine)
 	a.settings = services.NewSettingService(repo)
 
-	// 插件体系：装配后立即加载一次已启用的插件。
-	// 加载失败只记为日志——插件是可选能力，不应拖垮启动。
+	// 插件体系：装配后先恢复上次遗留的安装事务，再加载已启用的插件。
+	// 失败只记为日志——插件是可选能力，不应拖垮启动；
+	// 具体原因通过 PluginRecoverError 暴露给插件管理页。
 	a.setupPlugins(repo, dataDir)
 	if a.plugins != nil {
-		if loadErr := a.plugins.Reload(context.Background()); loadErr != nil {
+		if loadErr := a.plugins.Startup(context.Background()); loadErr != nil {
 			slog.Error("加载插件失败", "error", loadErr)
 		}
 	}

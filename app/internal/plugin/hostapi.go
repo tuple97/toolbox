@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -46,11 +47,20 @@ type HostEnv interface {
 	StorageList(pluginID string) (map[string]string, error)
 	// EmitEvent 把插件事件发往应用事件总线
 	EmitEvent(pluginID, name string, payload any) error
-	// CallPlugin 调用另一个插件的 handler（插件间通信）
-	CallPlugin(pluginID, handler string, args json.RawMessage) (json.RawMessage, error)
+	// CallPlugin 调用另一个插件公开的 handler（插件间通信）。
+	//
+	// callerID 是发起调用的插件；跨插件调用必须满足依赖声明与公开接口约束，
+	// 由实现方统一校验，插件不能只凭「知道 id」就调用别人。
+	CallPlugin(ctx context.Context, callerID, targetID, handler string, args json.RawMessage) (json.RawMessage, error)
 	// EnabledPlugins 已启用插件概览
 	EnabledPlugins() []PluginSummary
 }
+
+// maxCallDepth 单个插件自身允许的最大嵌套调用深度。
+//
+// 用它来阻断插件之间互相递归形成的无限调用链（A→B→A→B…）：
+// 每个插件记录自己发起的调用层数，超过上限直接失败。
+const maxCallDepth = 8
 
 // HTTPRequest 插件发起的 HTTP 请求描述。
 type HTTPRequest struct {
@@ -76,7 +86,20 @@ type HostBridge struct {
 	version string
 	perms   Permissions
 	client  *http.Client
+	// depth 当前插件发起的跨插件调用嵌套层数
+	depth atomic.Int32
+	// trace 当前执行栈的追踪（由运行时在每次执行前设置），
+	// 用于让嵌套的跨插件调用能识别「自己已经在本栈中」
+	trace atomic.Pointer[CallTrace]
 }
+
+// setCallTrace 由运行时在每次执行前后设置当前调用栈追踪。
+func (h *HostBridge) setCallTrace(trace *CallTrace) {
+	h.trace.Store(trace)
+}
+
+// currentTrace 返回当前调用栈追踪（可能为 nil）。
+func (h *HostBridge) currentTrace() *CallTrace { return h.trace.Load() }
 
 // NewHostBridge 创建宿主能力桥。
 func NewHostBridge(env HostEnv, id, version string, perms Permissions) *HostBridge {
@@ -239,12 +262,26 @@ func (h *HostBridge) EmitEvent(name string, payload any) error {
 	return h.env.EmitEvent(h.id, name, payload)
 }
 
-// CallPlugin 调用另一个插件的 handler。
+// CallPlugin 调用另一个插件公开的 handler。
+//
+// 目标插件、依赖声明与公开接口由宿主统一校验；这里额外限制调用深度，
+// 避免插件互相递归把运行时拖死。
 func (h *HostBridge) CallPlugin(pluginID, handler string, args json.RawMessage) (json.RawMessage, error) {
 	if pluginID == "" || handler == "" {
 		return nil, fmt.Errorf("调用插件需要提供插件标识与 handler 名")
 	}
-	return h.env.CallPlugin(pluginID, handler, args)
+	if h.depth.Add(1) > maxCallDepth {
+		h.depth.Add(-1)
+		return nil, fmt.Errorf("%w: 插件调用链过深（> %d），可能存在递归调用",
+			ErrPermissionDenied, maxCallDepth)
+	}
+	defer h.depth.Add(-1)
+
+	ctx := context.Background()
+	if trace := h.trace.Load(); trace != nil {
+		ctx = WithCallTrace(ctx, trace)
+	}
+	return h.env.CallPlugin(ctx, h.id, pluginID, handler, args)
 }
 
 // Plugins 返回已启用插件概览。

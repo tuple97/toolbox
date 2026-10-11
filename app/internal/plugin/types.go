@@ -1,7 +1,5 @@
 package plugin
 
-import "toolbox/app/internal/semver"
-
 // PluginSummary 已启用插件的概览（供插件间互相发现）。
 type PluginSummary struct {
 	ID      string `json:"id"`
@@ -10,6 +8,12 @@ type PluginSummary struct {
 }
 
 // InstalledInfo 已安装插件的完整信息（插件管理页使用）。
+//
+// 注意 enabled 与 active 的区别：
+//   - Enabled 表示「用户希望启用」；
+//   - Active 表示「依据完整依赖闭包与兼容性计算后，确实在运行」。
+//
+// 界面不应把 enabled 直接当成运行状态。
 type InstalledInfo struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -21,10 +25,16 @@ type InstalledInfo struct {
 	License     string `json:"license"`
 	Icon        string `json:"icon"`
 
-	// Enabled 是否启用
+	// Enabled 用户是否希望启用
 	Enabled bool `json:"enabled"`
-	// Trusted 是否已获得用户信任
+	// Active 是否实际已激活（依赖满足 + 兼容 + 已加载）
+	Active bool `json:"active"`
+	// Trusted 是否已获得用户或官方索引的信任
 	Trusted bool `json:"trusted"`
+	// TrustLevel 信任等级：none / user / official
+	TrustLevel string `json:"trustLevel"`
+	// TrustReason 信任判定依据
+	TrustReason string `json:"trustReason"`
 	// Official 是否来自官方索引的官方审核条目
 	Official bool `json:"official"`
 	// Source 安装来源类型
@@ -38,11 +48,15 @@ type InstalledInfo struct {
 	LoadError string `json:"loadError"`
 	// Handlers 已注册的后端处理方法
 	Handlers []string `json:"handlers"`
+	// Exports 对外公开的后端处理方法
+	Exports []string `json:"exports"`
 
-	// Compatible 是否与当前宿主版本兼容
+	// Compatible 是否与当前宿主版本及插件 API 版本兼容
 	Compatible bool `json:"compatible"`
 	// IncompatReason 不兼容原因
 	IncompatReason string `json:"incompatReason"`
+	// BlockedReason 有效状态被阻塞的原因（依赖缺失/被停用/循环依赖等）
+	BlockedReason string `json:"blockedReason"`
 
 	// InUseBy 依赖本插件的其它插件
 	InUseBy []string `json:"inUseBy"`
@@ -51,8 +65,11 @@ type InstalledInfo struct {
 	Permissions []string `json:"permissions"`
 	// Dependencies 依赖声明
 	Dependencies []DependencyRef `json:"dependencies"`
-	// MissingDependencies 未满足的依赖（非空表示装了但缺依赖，界面标红）
+	// MissingDependencies 未满足的依赖
 	MissingDependencies []MissingDependency `json:"missingDependencies"`
+
+	// ManifestOutdated 清单来自旧协议，需要重新安装才能升级到当前协议
+	ManifestOutdated bool `json:"manifestOutdated"`
 
 	// 扩展点
 	SidebarGroups  []SidebarGroup              `json:"sidebarGroups"`
@@ -63,40 +80,36 @@ type InstalledInfo struct {
 	MCPTools       []MCPToolContribution       `json:"mcpTools"`
 	Engines        Engines                     `json:"engines"`
 	Runtime        RuntimeSpec                 `json:"runtime"`
-	Installed      string                      `json:"installedAt"`
-	Updated        string                      `json:"updatedAt"`
-	// PreviousVersion 可回滚到的上一个版本（无则为空）
+
+	Installed       string `json:"installedAt"`
+	Updated         string `json:"updatedAt"`
 	PreviousVersion string `json:"previousVersion"`
 }
 
-// InstallRequest 安装请求。
-type InstallRequest struct {
-	// Source 来源：registry / url / file / local
+// MissingDependency 一条无法满足的依赖。
+type MissingDependency struct {
+	ID         string `json:"id"`
+	Constraint string `json:"constraint"`
+	// Reason 未满足的原因
+	Reason string `json:"reason"`
+}
+
+// PackageInput 一次安装请求中的一个包输入。
+type PackageInput struct {
+	// Source 来源：registry / url / file / local / archive
 	Source string `json:"source"`
 	// ID registry 来源时必填
-	ID string `json:"id,omitempty"`
+	ID string `json:"id"`
 	// Version registry 来源时可选，缺省取满足约束的最高版本
-	Version string `json:"version,omitempty"`
-	// Ref url / file / local 来源时的地址或路径
-	Ref string `json:"ref,omitempty"`
-	// Trust 用户是否已确认信任该来源
-	Trust bool `json:"trust"`
-	// AcceptPermissions 升级时是否接受新增权限
-	AcceptPermissions bool `json:"acceptPermissions"`
-}
-
-// InstallPlanItem 依赖求解后单个插件的动作。
-type InstallPlanItem struct {
-	ID      string `json:"id"`
 	Version string `json:"version"`
-	// Action install / upgrade / keep
-	Action string `json:"action"`
-	// Scanned 依赖由安装时扫描同级目录得到（用户并未显式选中），会就地安装
-	Scanned bool `json:"scanned"`
+	// Ref url / file / local 来源时的地址或路径；archive 来源时可作为展示名
+	Ref string `json:"ref"`
+	// Content archive 来源的安装包原始内容
+	Content []byte `json:"-"`
 }
 
-// InstallPreview 安装前的预览信息（权限确认弹窗的数据源）。
-type InstallPreview struct {
+// PackagePreview 单个待安装包的展示信息。
+type PackagePreview struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Version     string `json:"version"`
@@ -106,45 +119,85 @@ type InstallPreview struct {
 	Homepage    string `json:"homepage"`
 	License     string `json:"license"`
 
-	// Source 来源类型
-	Source string `json:"source"`
-	// SourceRef 来源引用
+	Source    string `json:"source"`
 	SourceRef string `json:"sourceRef"`
-	// Official 是否官方可信（可直接安装，无需二次确认）
-	Official bool `json:"official"`
-	// Trusted 该来源/发布者是否已被本地信任
-	Trusted bool `json:"trusted"`
-	// NeedTrust 是否需要用户点击「信任并安装」
-	NeedTrust bool `json:"needTrust"`
-	// Checksum 安装包摘要
-	Checksum string `json:"checksum"`
-	// Signed 是否带有可验证的发布者签名
-	Signed bool `json:"signed"`
+	Official  bool   `json:"official"`
+	Checksum  string `json:"checksum"`
 
 	// Upgrade 是否为升级既有插件
 	Upgrade bool `json:"upgrade"`
 	// CurrentVersion 当前已安装版本（升级时非空）
 	CurrentVersion string `json:"currentVersion"`
-	// Permissions 权限中文描述
-	Permissions []string `json:"permissions"`
-	// AddedPermissions 本次升级新增的权限（需要用户重新确认）
-	AddedPermissions []string `json:"addedPermissions"`
-	// Dependencies 依赖声明
-	Dependencies []DependencyRef `json:"dependencies"`
-	// Plan 依赖闭包安装计划
-	Plan []InstallPlanItem `json:"plan"`
-	// MissingDependencies 无法满足的依赖：不阻断安装，由界面标红提示
-	MissingDependencies []MissingDependency `json:"missingDependencies"`
-	// Warnings 风险提示
-	Warnings []string `json:"warnings"`
+
+	Permissions      []string        `json:"permissions"`
+	AddedPermissions []string        `json:"addedPermissions"`
+	Dependencies     []DependencyRef `json:"dependencies"`
 }
 
-// MissingDependency 一条无法满足的依赖。
-type MissingDependency struct {
-	ID         string `json:"id"`
-	Constraint string `json:"constraint"`
-	// Reason 未满足的原因（未安装 / 已装版本不符）
-	Reason string `json:"reason"`
+// PlanItem 安装计划中的一条动作。
+type PlanItem struct {
+	ID      string `json:"id"`
+	Version string `json:"version"`
+	// Action install / upgrade / reinstall / keep
+	Action string `json:"action"`
+	// Source 包的来源类型：registry / url / file / local / batch
+	Source string `json:"source"`
+	// SourceRef 来源引用（下载地址 / 本地路径 / 包文件名）
+	SourceRef string `json:"sourceRef"`
+	// Checksum 安装包摘要
+	Checksum string `json:"checksum"`
+	// Official 是否官方索引条目
+	Official bool `json:"official"`
+	// Root 是否为用户显式选择的包
+	Root bool `json:"root"`
+	// NeedTrust 是否需要用户确认信任
+	NeedTrust bool `json:"needTrust"`
+	// TrustReason 信任判定依据
+	TrustReason string `json:"trustReason"`
+	// AddedPermissions 本次相对已安装版本新增的权限
+	AddedPermissions []string `json:"addedPermissions"`
+	// Cached 本地已有可复用的包内容
+	Cached bool `json:"cached"`
+}
+
+// InstallPreview 安装预览：完整依赖计划 + 需要用户确认的事项。
+//
+// 预览与安装共用同一个计划（PlanID），安装时不会重新求解。
+type InstallPreview struct {
+	// PlanID 安装计划标识；调用 InstallPlan 时回传它
+	PlanID string `json:"planId"`
+	// ExpiresAt 计划过期时间（RFC3339）
+	ExpiresAt string `json:"expiresAt"`
+	// Packages 用户显式选择的包
+	Packages []PackagePreview `json:"packages"`
+	// Plan 完整依赖闭包（含已满足的 keep 项）
+	Plan []PlanItem `json:"plan"`
+	// Warnings 风险提示
+	Warnings []string `json:"warnings"`
+	// NeedTrust 是否存在需要用户确认信任的来源
+	NeedTrust bool `json:"needTrust"`
+	// TrustReason 为什么需要确认信任
+	TrustReason string `json:"trustReason"`
+	// AddedPermissions 需要用户确认的新增权限
+	AddedPermissions []string `json:"addedPermissions"`
+	// PendingDownloads 需要联网下载的安装包数量
+	PendingDownloads int `json:"pendingDownloads"`
+}
+
+// PackageInputWire 前端传来的安装输入（离线包内容用 base64 承载）。
+type PackageInputWire struct {
+	// Source 来源：registry / url / file / local / archive
+	Source string `json:"source"`
+	// ID registry 来源时的插件标识
+	ID string `json:"id"`
+	// Version registry 来源时可选，缺省取满足约束的最高版本
+	Version string `json:"version"`
+	// Ref url / file / local 来源的地址或路径；archive 来源的展示名
+	Ref string `json:"ref"`
+	// FileName 离线包文件名（仅用于展示）
+	FileName string `json:"fileName"`
+	// ContentBase64 离线包内容的 base64 编码
+	ContentBase64 string `json:"contentBase64"`
 }
 
 // UpdateInfo 单个插件的可用更新。
@@ -155,100 +208,8 @@ type UpdateInfo struct {
 	LatestVersion    string   `json:"latestVersion"`
 	Official         bool     `json:"official"`
 	AddedPermissions []string `json:"addedPermissions"`
-	// CanAutoUpgrade 权限未扩张时可静默升级
+	// CanAutoUpgrade 权限未扩张且来源已信任时可静默升级
 	CanAutoUpgrade bool `json:"canAutoUpgrade"`
-}
-
-// RegistryEntry 官方索引中的一条插件记录。
-type RegistryEntry struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Version     string `json:"version"`
-	Publisher   string `json:"publisher"`
-	Description string `json:"description,omitempty"`
-	Icon        string `json:"icon,omitempty"`
-	Homepage    string `json:"homepage,omitempty"`
-	License     string `json:"license,omitempty"`
-	Author      string `json:"author,omitempty"`
-
-	// Repo 源码仓库地址
-	Repo string `json:"repo,omitempty"`
-	// Download 安装包下载地址
-	Download string `json:"download"`
-	// Checksum 安装包摘要，形如 sha256:xxxx
-	Checksum string `json:"checksum"`
-	// Signature 发布者对安装包摘要的 Ed25519 签名（base64）
-	Signature string `json:"signature,omitempty"`
-	// Official 是否官方审核通过
-	Official bool `json:"official,omitempty"`
-
-	Engines      Engines           `json:"engines,omitempty"`
-	Dependencies map[string]string `json:"dependencies,omitempty"`
-	Permissions  Permissions       `json:"permissions,omitempty"`
-	Runtime      RuntimeSpec       `json:"runtime,omitempty"`
-	Contributes  Contributions     `json:"contributes,omitempty"`
-}
-
-// Manifest 把索引条目转换为清单对象。
-//
-// 校验在解析索引时统一做一次；转换出的清单仅用于依赖求解与展示。
-func (e RegistryEntry) Manifest() *Manifest {
-	return &Manifest{
-		ID:           e.ID,
-		Name:         e.Name,
-		Version:      e.Version,
-		Publisher:    e.Publisher,
-		Description:  e.Description,
-		Icon:         e.Icon,
-		Homepage:     e.Homepage,
-		License:      e.License,
-		Author:       e.Author,
-		Engines:      e.Engines,
-		Dependencies: e.Dependencies,
-		Permissions:  e.Permissions,
-		Runtime:      e.Runtime,
-		Contributes:  e.Contributes,
-	}
-}
-
-// RegistryIndex 官方索引文件结构。
-type RegistryIndex struct {
-	// SchemaVersion 索引格式版本
-	SchemaVersion int `json:"schemaVersion"`
-	// UpdatedAt 索引更新时间（RFC3339）
-	UpdatedAt string `json:"updatedAt,omitempty"`
-	// Plugins 插件条目
-	Plugins []RegistryEntry `json:"plugins"`
-}
-
-// Find 在索引中查找指定插件与版本；version 为空时返回该插件最高版本。
-func (idx *RegistryIndex) Find(id, version string) *RegistryEntry {
-	if idx == nil {
-		return nil
-	}
-	var best *RegistryEntry
-	var bestVersion semver.Version
-	for i := range idx.Plugins {
-		entry := &idx.Plugins[i]
-		if entry.ID != id {
-			continue
-		}
-		if version != "" {
-			if entry.Version == version {
-				return entry
-			}
-			continue
-		}
-		v, err := semver.Parse(entry.Version)
-		if err != nil {
-			continue
-		}
-		if best == nil || v.Compare(bestVersion) > 0 {
-			best = entry
-			bestVersion = v
-		}
-	}
-	return best
 }
 
 // MarketplaceItem 插件市场列表项（已安装状态与本地对比后的结果）。
@@ -265,6 +226,7 @@ type MarketplaceItem struct {
 	Installed        bool     `json:"installed"`
 	InstalledVersion string   `json:"installedVersion"`
 	Enabled          bool     `json:"enabled"`
+	Active           bool     `json:"active"`
 	Updatable        bool     `json:"updatable"`
 	Permissions      []string `json:"permissions"`
 	Dependencies     []string `json:"dependencies"`
@@ -272,7 +234,7 @@ type MarketplaceItem struct {
 
 // MarketplaceSnapshot 插件市场快照。
 type MarketplaceSnapshot struct {
-	// State idle / loading / ready / error
+	// State idle / ready / error
 	State string `json:"state"`
 	// Source 索引地址
 	Source string `json:"source"`
@@ -280,16 +242,10 @@ type MarketplaceSnapshot struct {
 	UpdatedAt string `json:"updatedAt"`
 	// Verified 索引签名是否校验通过
 	Verified bool `json:"verified"`
+	// SignatureEnabled 宿主是否配置了索引签名公钥
+	SignatureEnabled bool `json:"signatureEnabled"`
 	// Error 加载失败原因
 	Error string `json:"error"`
 	// Items 条目列表
 	Items []MarketplaceItem `json:"items"`
-}
-
-// RegistryProvider 官方索引与安装包的来源配置。
-type RegistryProvider struct {
-	// IndexURL registry.json 地址
-	IndexURL string
-	// SignatureURL 分离式签名地址（留空表示签名内联在索引的同级 .sig）
-	SignatureURL string
 }

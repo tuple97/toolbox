@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,7 +28,7 @@ type EventSink interface {
 
 // Options 管理器装配参数。
 type Options struct {
-	// DataDir 应用数据目录（插件装在 <DataDir>/plugins 下）
+	// DataDir 应用数据目录
 	DataDir string
 	// AppVersion 宿主版本，用于 engines 兼容性判断
 	AppVersion string
@@ -50,30 +51,36 @@ type loaded struct {
 }
 
 // Manager 插件体系的统一入口，同时实现 HostEnv。
+//
+// 锁的划分（避免联网操作把整个插件管理堵死）：
+//   - mu：状态读写（records/manifests/loaded/graph），只做内存操作；
+//   - installMu：安装、卸载、启停等会改磁盘的操作串行化；
+//   - indexMu：索引缓存，网络请求只持有它。
 type Manager struct {
-	mu sync.RWMutex
-
-	store *Store
-	opts  Options
+	store  *Store
+	client *RegistryClient
+	opts   Options
 
 	factory RuntimeFactory
 
-	// 已安装插件的安装记录与清单（以磁盘状态为准）
+	mu        sync.RWMutex
 	records   map[string]*InstallRecord
 	manifests map[string]*Manifest
-	// 已加载的运行时（仅启用且受信任的插件）
-	loaded map[string]*loaded
+	loaded    map[string]*loaded
+	graph     *DepGraph
+	blocked   map[string]string
+	// recoverErr 启动恢复失败的原因（供界面提示）
+	recoverErr string
 
-	// 官方索引缓存
-	market        *Market
+	installMu sync.Mutex
+
+	plans *planCache
+
+	indexMu       sync.Mutex
 	index         *RegistryIndex
 	indexVerified bool
 	indexErr      string
-	indexLoaded   bool
 	indexLoadedAt time.Time
-
-	// pending 待安装缓存：Preview 与 Install 之间复用已下载/已解包的内容
-	pending map[string]*pendingInstall
 }
 
 // NewManager 创建插件管理器。
@@ -86,71 +93,114 @@ func NewManager(opts Options) *Manager {
 	}
 	return &Manager{
 		store:     NewStore(opts.DataDir),
+		client:    NewRegistryClient(opts.Registry),
 		opts:      opts,
 		factory:   opts.RuntimeFactory,
 		records:   make(map[string]*InstallRecord),
 		manifests: make(map[string]*Manifest),
 		loaded:    make(map[string]*loaded),
-		market:    NewMarket(opts.Registry),
+		blocked:   make(map[string]string),
+		graph:     NewDepGraph(nil),
+		plans:     newPlanCache(),
 	}
 }
 
 // Store 返回底层插件仓库。
 func (m *Manager) Store() *Store { return m.store }
 
-// Reload 重新扫描磁盘并加载所有已启用且受信任的插件。
-func (m *Manager) Reload(ctx context.Context) error {
+// Startup 执行启动流程：恢复遗留事务 → 扫描磁盘 → 计算有效状态并加载。
+//
+// 插件体系是可选能力，恢复失败不应让应用起不来，因此错误只记录并暴露，
+// 由插件管理页提示用户。
+func (m *Manager) Startup(ctx context.Context) error {
+	m.installMu.Lock()
+	defer m.installMu.Unlock()
+
+	if err := m.store.EnsureLayout(); err != nil {
+		return err
+	}
+
+	recovered, err := m.store.RecoverTransactions()
+	if err != nil {
+		m.mu.Lock()
+		m.recoverErr = err.Error()
+		m.mu.Unlock()
+		slog.Error("插件安装事务恢复失败", "error", err)
+	}
+	for _, item := range recovered {
+		slog.Info("已恢复插件安装事务", "tx", item.ID, "state", item.State, "rolledBack", item.Rolled)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.reloadLocked(ctx)
 }
 
+// RecoverError 返回启动恢复过程中遇到的问题（无则空串）。
+func (m *Manager) RecoverError() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.recoverErr
+}
+
+// Reload 重新扫描磁盘并加载插件。
+func (m *Manager) Reload(ctx context.Context) error {
+	m.installMu.Lock()
+	defer m.installMu.Unlock()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.reloadLocked(ctx)
+}
+
+// reloadLocked 重新扫描磁盘、计算有效状态并按拓扑顺序加载。
+//
+// 调用方必须持有 m.mu（写锁）与 m.installMu。
 func (m *Manager) reloadLocked(ctx context.Context) error {
 	m.closeAllLocked()
 
-	if err := m.store.EnsureRoot(); err != nil {
+	if err := m.store.EnsureLayout(); err != nil {
 		return err
 	}
 
-	records, manifests, err := m.scanLocked()
-	if err != nil {
-		return err
-	}
+	records, manifests := m.scan()
 	m.records = records
 	m.manifests = manifests
+	m.graph = NewDepGraph(manifests)
 
-	// 只加载「启用 + 受信任 + 兼容」的插件
-	candidates := make(map[string]*Manifest)
-	for id, rec := range records {
-		mf := manifests[id]
-		if mf == nil || !rec.Enabled || !rec.Trusted {
-			continue
+	active, blocked := m.computeEffectiveLocked()
+	m.blocked = blocked
+
+	order, err := m.graph.OrderSubset(sortedKeys(active))
+	if err != nil {
+		// 循环依赖：整条链上都无法确定加载顺序，全部阻塞并给出原因
+		for id := range active {
+			blocked[id] = err.Error()
+			delete(active, id)
 		}
-		if reason := m.incompatibleReason(mf); reason != "" {
-			slog.Warn("插件与当前版本不兼容，已跳过加载", "plugin", id, "reason", reason)
-			continue
-		}
-		candidates[id] = mf
+		slog.Error("插件依赖存在循环，相关插件不予加载", "error", err)
+		return nil
 	}
 
-	// 拓扑排序：依赖先加载。存在环时退化为按 id 顺序加载，避免整体不可用。
-	ordered, topoErr := TopoSort(candidates)
-	if topoErr != nil {
-		slog.Error("插件依赖存在循环，按 id 顺序加载", "error", topoErr)
-		ordered = sortManifestsByID(candidates)
-	}
-
-	for _, mf := range ordered {
-		item := m.loadPluginLocked(ctx, mf, records[mf.ID])
+	loaded := make(map[string]struct{}, len(order))
+	for _, mf := range order {
+		if dep := firstUnloadedDep(mf, loaded); dep != "" {
+			blocked[mf.ID] = fmt.Sprintf("依赖 %s 未能加载", dep)
+			delete(active, mf.ID)
+			continue
+		}
+		item := m.loadPlugin(ctx, mf)
 		m.loaded[mf.ID] = item
-
-		switch {
-		case item.loadErr != "":
+		if item.loadErr != "" {
+			blocked[mf.ID] = item.loadErr
+			delete(active, mf.ID)
 			slog.Error("插件加载失败", "plugin", mf.ID, "error", item.loadErr)
-		case item.runtime == nil:
-			// 纯前端插件没有后端运行时，属正常状态
+			continue
+		}
+		loaded[mf.ID] = struct{}{}
+		if item.runtime == nil {
 			slog.Info("插件已加载（纯前端）", "plugin", mf.ID, "version", mf.Version)
-		default:
+		} else {
 			slog.Info("插件已加载", "plugin", mf.ID, "version", mf.Version,
 				"handlers", item.runtime.Handlers())
 		}
@@ -158,11 +208,15 @@ func (m *Manager) reloadLocked(ctx context.Context) error {
 	return nil
 }
 
-// scanLocked 读取磁盘上的安装记录与清单。
-func (m *Manager) scanLocked() (map[string]*InstallRecord, map[string]*Manifest, error) {
+// scan 读取磁盘上的安装记录与清单。
+//
+// 任何一条记录或清单损坏都只影响该插件：它会被保留在状态列表里，
+// 但标记为不可用（界面据此提示用户重新安装）。
+func (m *Manager) scan() (map[string]*InstallRecord, map[string]*Manifest) {
 	ids, err := m.store.ListIDs()
 	if err != nil {
-		return nil, nil, err
+		slog.Error("读取插件目录失败", "error", err)
+		return map[string]*InstallRecord{}, map[string]*Manifest{}
 	}
 
 	records := make(map[string]*InstallRecord, len(ids))
@@ -174,6 +228,12 @@ func (m *Manager) scanLocked() (map[string]*InstallRecord, map[string]*Manifest,
 			slog.Warn("读取插件安装记录失败，已跳过", "plugin", id, "error", recErr)
 			continue
 		}
+		if rec.Version == "" || !m.store.HasVersion(id, rec.Version) {
+			slog.Warn("插件记录指向的版本目录不存在", "plugin", id, "version", rec.Version)
+			rec.Enabled = false
+			records[id] = rec
+			continue
+		}
 		mf, mfErr := m.store.LoadManifest(id, rec.Version)
 		if mfErr != nil {
 			slog.Warn("读取插件清单失败，已标记不可用", "plugin", id, "error", mfErr)
@@ -181,22 +241,109 @@ func (m *Manager) scanLocked() (map[string]*InstallRecord, map[string]*Manifest,
 			records[id] = rec
 			continue
 		}
+		if mf.ID != id {
+			slog.Warn("插件清单中的 id 与目录不一致，已标记不可用", "plugin", id, "manifestID", mf.ID)
+			rec.Enabled = false
+			records[id] = rec
+			continue
+		}
 		records[id] = rec
 		manifests[id] = mf
 	}
-	return records, manifests, nil
+	return records, manifests
 }
 
-// loadPluginLocked 创建并启动单个插件的运行时。
-func (m *Manager) loadPluginLocked(ctx context.Context, mf *Manifest, rec *InstallRecord) *loaded {
+// computeEffectiveLocked 计算「实际可运行」的插件集合与阻塞原因。
+//
+// 规则：用户启用只是必要条件；还必须通过信任、兼容性与完整依赖闭包检查，
+// 否则记录会被阻塞并给出原因。enabled 不等于实际运行状态。
+func (m *Manager) computeEffectiveLocked() (map[string]struct{}, map[string]string) {
+	active := make(map[string]struct{})
+	blocked := make(map[string]string)
+
+	for id, rec := range m.records {
+		if !rec.Enabled {
+			continue
+		}
+		mf := m.manifests[id]
+		switch {
+		case mf == nil:
+			blocked[id] = "插件清单缺失或损坏"
+			continue
+		case !rec.IsTrusted():
+			blocked[id] = "插件未被信任"
+			continue
+		}
+		if reason := m.incompatibleReason(mf); reason != "" {
+			blocked[id] = reason
+			continue
+		}
+		active[id] = struct{}{}
+	}
+
+	// 依赖闭包检查：依赖必须同样处于「启用 + 可信 + 兼容」状态
+	for changed := true; changed; {
+		changed = false
+		for id := range active {
+			mf := m.manifests[id]
+			if mf == nil {
+				delete(active, id)
+				blocked[id] = "插件清单缺失或损坏"
+				changed = true
+				continue
+			}
+			if reason := m.dependencyBlockReasonLocked(mf, active); reason != "" {
+				delete(active, id)
+				blocked[id] = reason
+				changed = true
+			}
+		}
+	}
+	return active, blocked
+}
+
+// dependencyBlockReasonLocked 返回依赖闭包不满足的原因；满足时返回空串。
+func (m *Manager) dependencyBlockReasonLocked(mf *Manifest, active map[string]struct{}) string {
+	for _, dep := range mf.SortedDependencies() {
+		rec, installed := m.records[dep.ID]
+		if !installed {
+			return fmt.Sprintf("依赖 %s 未安装", dep.ID)
+		}
+		if !rec.Enabled {
+			return fmt.Sprintf("依赖 %s 已被停用", dep.ID)
+		}
+		if _, ok := active[dep.ID]; !ok {
+			return fmt.Sprintf("依赖 %s 当前不可用", dep.ID)
+		}
+		constraint, err := semver.ParseConstraint(dep.Constraint)
+		if err != nil {
+			return fmt.Sprintf("依赖 %s 的约束非法", dep.ID)
+		}
+		version, vErr := semver.Parse(rec.Version)
+		if vErr != nil {
+			return fmt.Sprintf("依赖 %s 的已安装版本号非法", dep.ID)
+		}
+		if !constraint.Check(version) {
+			return fmt.Sprintf("依赖 %s 当前为 %s，不满足 %s", dep.ID, rec.Version, dep.Constraint)
+		}
+	}
+	return ""
+}
+
+// loadPlugin 创建并启动单个插件的运行时。
+func (m *Manager) loadPlugin(ctx context.Context, mf *Manifest) *loaded {
 	item := &loaded{manifest: mf}
 
 	kind := mf.BackendKind()
 	if kind == BackendNone {
 		return item // 纯前端插件，无需后端运行时
 	}
+	if kind != BackendJS {
+		item.loadErr = fmt.Sprintf("不支持的后端运行时: %q", kind)
+		return item
+	}
 
-	runtime, err := m.factory(kind)
+	runtime, err := m.factory(mf.Runtime)
 	if err != nil {
 		item.loadErr = err.Error()
 		return item
@@ -206,11 +353,11 @@ func (m *Manager) loadPluginLocked(ctx context.Context, mf *Manifest, rec *Insta
 	source, err := m.store.ReadAsset(mf.ID, mf.Version, entry)
 	if err != nil {
 		item.loadErr = fmt.Sprintf("读取后端入口失败: %v", err)
+		_ = runtime.Close()
 		return item
 	}
 
-	perms := mf.Permissions
-	bridge := NewHostBridge(m, mf.ID, mf.Version, perms)
+	bridge := NewHostBridge(m, mf.ID, mf.Version, mf.Permissions)
 	if err := runtime.Start(ctx, bridge, source); err != nil {
 		item.loadErr = err.Error()
 		_ = runtime.Close()
@@ -236,17 +383,28 @@ func (m *Manager) closeAllLocked() {
 
 // Close 释放全部运行时。
 func (m *Manager) Close() error {
+	m.installMu.Lock()
+	defer m.installMu.Unlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.closeAllLocked()
 	return nil
 }
 
-// Invoke 调用插件注册的后端 handler。
-func (m *Manager) Invoke(_ context.Context, id, handler string, args json.RawMessage) (json.RawMessage, error) {
+// Invoke 调用插件自己注册的后端 handler（前端绑定走这里）。
+func (m *Manager) Invoke(ctx context.Context, id, handler string, args json.RawMessage) (json.RawMessage, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// 外部调用是新的调用栈起点
+	if CallTraceFrom(ctx) == nil {
+		ctx = WithCallTrace(ctx, NewCallTrace())
+	}
+
 	m.mu.RLock()
 	rec, ok := m.records[id]
 	item, loadedOK := m.loaded[id]
+	blocked := m.blocked[id]
 	m.mu.RUnlock()
 
 	if !ok {
@@ -256,13 +414,16 @@ func (m *Manager) Invoke(_ context.Context, id, handler string, args json.RawMes
 		return nil, fmt.Errorf("%w: %s", ErrDisabled, id)
 	}
 	if !loadedOK || item.runtime == nil {
-		reason := "插件未加载"
-		if loadedOK && item.loadErr != "" {
+		reason := blocked
+		if reason == "" {
+			reason = "插件未加载"
+		}
+		if item != nil && item.loadErr != "" {
 			reason = item.loadErr
 		}
-		return nil, fmt.Errorf("插件 %s 不可用: %s", id, reason)
+		return nil, fmt.Errorf("%w: %s：%s", ErrBlocked, id, reason)
 	}
-	return item.runtime.Call(context.Background(), handler, args)
+	return item.runtime.Call(ctx, handler, args)
 }
 
 // ListInstalled 返回全部已安装插件的完整信息。
@@ -273,13 +434,9 @@ func (m *Manager) ListInstalled() []InstalledInfo {
 }
 
 func (m *Manager) listInstalledLocked() []InstalledInfo {
-	ids := make([]string, 0, len(m.records))
-	for id := range m.records {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-
+	ids := sortedKeys(m.records)
 	out := make([]InstalledInfo, 0, len(ids))
+
 	for _, id := range ids {
 		rec := m.records[id]
 		mf := m.manifests[id]
@@ -287,7 +444,8 @@ func (m *Manager) listInstalledLocked() []InstalledInfo {
 		info := InstalledInfo{
 			ID:                  id,
 			Enabled:             rec.Enabled,
-			Trusted:             rec.Trusted,
+			Trusted:             rec.IsTrusted(),
+			TrustLevel:          string(rec.Trust),
 			Official:            rec.Official,
 			Source:              rec.Source,
 			SourceRef:           rec.SourceRef,
@@ -304,8 +462,17 @@ func (m *Manager) listInstalledLocked() []InstalledInfo {
 			SettingsPanels:      []SettingsPanelContribution{},
 			MCPTools:            []MCPToolContribution{},
 			Handlers:            []string{},
+			Exports:             []string{},
 			InUseBy:             []string{},
 			Compatible:          true,
+		}
+
+		if rec.Trust == TrustOfficial {
+			info.TrustReason = "官方索引条目，索引签名校验通过"
+		} else if rec.Trust == TrustUser {
+			info.TrustReason = "由你确认信任的来源"
+		} else {
+			info.TrustReason = "尚未信任"
 		}
 
 		if mf != nil {
@@ -319,9 +486,11 @@ func (m *Manager) listInstalledLocked() []InstalledInfo {
 			info.Icon = mf.Icon
 			info.Engines = mf.Engines
 			info.Runtime = mf.Runtime
+			info.Exports = append([]string{}, mf.Runtime.Exports...)
 			info.Permissions = mf.Permissions.PermissionSummary()
 			info.Dependencies = mf.SortedDependencies()
 			info.MissingDependencies = m.missingDependenciesLocked(mf)
+			info.ManifestOutdated = mf.Legacy()
 			if mf.Contributes.Sidebar != nil {
 				info.SidebarGroups = mf.Contributes.Sidebar.Groups
 			}
@@ -336,18 +505,34 @@ func (m *Manager) listInstalledLocked() []InstalledInfo {
 				info.Compatible = false
 				info.IncompatReason = reason
 			}
-			info.InUseBy = DependentsOf(id, m.manifests)
+			info.InUseBy = m.graph.Dependents(id)
 		} else {
 			info.Version = rec.Version
 			info.LoadError = "插件清单缺失或损坏"
 		}
 
 		if item, ok := m.loaded[id]; ok {
-			info.Loaded = item.runtime != nil
-			info.LoadError = item.loadErr
+			info.Loaded = item.runtime != nil && item.loadErr == ""
+			if item.loadErr != "" {
+				info.LoadError = item.loadErr
+			}
 			if item.runtime != nil {
 				info.Handlers = item.runtime.Handlers()
 			}
+		}
+
+		// 有效状态：用户启用只是必要条件，还要满足信任、兼容与完整依赖闭包，
+		// 并且（有后端时）运行时确实加载成功。
+		blockReason := m.blocked[id]
+		active := rec.Enabled && rec.IsTrusted() && info.Compatible &&
+			blockReason == "" && mf != nil
+		if active && mf.BackendKind() != BackendNone {
+			active = info.Loaded
+		}
+		info.Active = active
+		info.BlockedReason = blockReason
+		if !rec.Enabled {
+			info.BlockedReason = ""
 		}
 
 		out = append(out, info)
@@ -355,38 +540,79 @@ func (m *Manager) listInstalledLocked() []InstalledInfo {
 	return out
 }
 
-// incompatibleReason 返回与宿主版本不兼容的原因；兼容时返回空串。
+// missingDependenciesLocked 列出清单里声明、但当前无法满足的依赖。
+func (m *Manager) missingDependenciesLocked(mf *Manifest) []MissingDependency {
+	out := make([]MissingDependency, 0)
+	for _, dep := range mf.SortedDependencies() {
+		rec, installed := m.records[dep.ID]
+		if !installed {
+			out = append(out, MissingDependency{
+				ID:         dep.ID,
+				Constraint: dep.Constraint,
+				Reason:     "未安装",
+			})
+			continue
+		}
+		constraint, cErr := semver.ParseConstraint(dep.Constraint)
+		version, vErr := semver.Parse(rec.Version)
+		if cErr == nil && vErr == nil && constraint.Check(version) {
+			continue
+		}
+		out = append(out, MissingDependency{
+			ID:         dep.ID,
+			Constraint: dep.Constraint,
+			Reason:     fmt.Sprintf("已安装 %s，不满足约束", rec.Version),
+		})
+	}
+	return out
+}
+
+// incompatibleReason 返回与宿主 / 插件 API 不兼容的原因；兼容时返回空串。
 func (m *Manager) incompatibleReason(mf *Manifest) string {
-	if mf == nil || mf.Engines.Toolbox == "" {
+	if mf == nil {
 		return ""
 	}
-	current, err := semver.Parse(m.opts.AppVersion)
+	if reason := m.checkVersionConstraint(mf.Engines.Toolbox, m.opts.AppVersion, "应用"); reason != "" {
+		return reason
+	}
+	return m.checkVersionConstraint(mf.Engines.PluginAPI, PluginAPIVersion, "插件 API")
+}
+
+// checkVersionConstraint 校验单个版本约束。
+func (m *Manager) checkVersionConstraint(constraint, current, label string) string {
+	if strings.TrimSpace(constraint) == "" {
+		return ""
+	}
+	cur, err := semver.Parse(current)
 	if err != nil {
 		// 宿主版本号非法（开发构建常见）时不做拦截
 		return ""
 	}
-	constraint, err := semver.ParseConstraint(mf.Engines.Toolbox)
+	parsed, err := semver.ParseConstraint(constraint)
 	if err != nil {
-		return "清单中的 engines.toolbox 约束非法"
+		return fmt.Sprintf("清单中的 %s 版本约束非法", label)
 	}
-	if !constraint.Check(current) {
-		return fmt.Sprintf("需要应用版本 %s，当前为 %s", mf.Engines.Toolbox, m.opts.AppVersion)
+	if !parsed.Check(cur) {
+		return fmt.Sprintf("需要%s版本 %s，当前为 %s", label, constraint, current)
 	}
 	return ""
 }
 
-// sortManifestsByID 按插件 id 排序，作为拓扑排序失败时的兜底顺序。
-func sortManifestsByID(items map[string]*Manifest) []*Manifest {
-	ids := make([]string, 0, len(items))
-	for id := range items {
-		ids = append(ids, id)
+// PluginManifest 返回已安装插件的当前清单（未安装返回 nil）。
+func (m *Manager) PluginManifest(id string) *Manifest {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.manifests[id]
+}
+
+// RuntimeHandlers 返回指定插件已注册的 handler 名（供诊断）。
+func (m *Manager) RuntimeHandlers(id string) []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if item, ok := m.loaded[id]; ok && item.runtime != nil {
+		return item.runtime.Handlers()
 	}
-	sort.Strings(ids)
-	out := make([]*Manifest, 0, len(ids))
-	for _, id := range ids {
-		out = append(out, items[id])
-	}
-	return out
+	return nil
 }
 
 // ---------------------------------------------------------------- HostEnv 实现
@@ -426,6 +652,28 @@ func (m *Manager) StorageList(pluginID string) (map[string]string, error) {
 	return m.opts.Storage.List(pluginID)
 }
 
+// ClearPluginData 清除某个插件的全部私有配置（卸载默认不清理，需显式调用）。
+func (m *Manager) ClearPluginData(id string) error {
+	if m.opts.Storage == nil {
+		return fmt.Errorf("插件存储不可用")
+	}
+	all, err := m.opts.Storage.List(id)
+	if err != nil {
+		return err
+	}
+	keys := make([]string, 0, len(all))
+	for key := range all {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if err := m.opts.Storage.Delete(id, key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // EmitEvent 实现 HostEnv，事件名加 "plugin:" 前缀避免与内置事件冲突。
 func (m *Manager) EmitEvent(pluginID, name string, payload any) error {
 	if m.opts.Events == nil {
@@ -435,9 +683,62 @@ func (m *Manager) EmitEvent(pluginID, name string, payload any) error {
 	return nil
 }
 
-// CallPlugin 实现 HostEnv：调用另一个插件的 handler。
-func (m *Manager) CallPlugin(pluginID, handler string, args json.RawMessage) (json.RawMessage, error) {
-	return m.Invoke(context.Background(), pluginID, handler, args)
+// CallPlugin 实现 HostEnv：在依赖关系与公开接口约束下调用另一个插件。
+func (m *Manager) CallPlugin(ctx context.Context, callerID, targetID, handler string, args json.RawMessage) (json.RawMessage, error) {
+	if callerID == "" || targetID == "" || handler == "" {
+		return nil, fmt.Errorf("调用插件需要提供调用方、目标插件与 handler 名")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if CallTraceFrom(ctx) == nil {
+		ctx = WithCallTrace(ctx, NewCallTrace())
+	}
+
+	m.mu.RLock()
+	caller := m.manifests[callerID]
+	target := m.manifests[targetID]
+	targetRec := m.records[targetID]
+	targetItem := m.loaded[targetID]
+	targetBlocked := m.blocked[targetID]
+	m.mu.RUnlock()
+
+	if caller == nil {
+		return nil, fmt.Errorf("%w: 调用方 %s 未安装", ErrNotInstalled, callerID)
+	}
+	if callerID != targetID {
+		// 跨插件调用必须先声明依赖：知道 id 不等于可以随意调用
+		constraint, declared := caller.Dependencies[targetID]
+		if !declared {
+			return nil, fmt.Errorf("%w: 插件 %s 未声明对 %s 的依赖",
+				ErrPermissionDenied, callerID, targetID)
+		}
+		if targetRec == nil {
+			return nil, fmt.Errorf("%w: %s", ErrNotInstalled, targetID)
+		}
+		parsed, err := semver.ParseConstraint(constraint)
+		version, vErr := semver.Parse(targetRec.Version)
+		if err != nil || vErr != nil || !parsed.Check(version) {
+			return nil, fmt.Errorf("%w: %s 当前为 %s，不满足 %s 声明的 %s",
+				ErrDependencyConflict, targetID, targetRec.Version, callerID, constraint)
+		}
+		// 只有目标插件显式公开的 handler 才能被跨插件调用
+		if !target.ExportsHandler(handler) {
+			return nil, fmt.Errorf("%w: %s 未公开 handler %q（需在清单 runtime.exports 中声明）",
+				ErrNotExported, targetID, handler)
+		}
+	}
+
+	if targetItem == nil || targetItem.runtime == nil {
+		reason := targetBlocked
+		if reason == "" {
+			reason = "目标插件未加载"
+		}
+		return nil, fmt.Errorf("%w: %s：%s", ErrBlocked, targetID, reason)
+	}
+
+	// 递归深度限制由调用方（HostBridge）按插件自身计数，见 HostBridge.CallPlugin
+	return targetItem.runtime.Call(ctx, handler, args)
 }
 
 // EnabledPlugins 实现 HostEnv。
@@ -447,7 +748,10 @@ func (m *Manager) EnabledPlugins() []PluginSummary {
 
 	out := make([]PluginSummary, 0, len(m.loaded))
 	for id, item := range m.loaded {
-		if item.manifest == nil {
+		if item.manifest == nil || m.blocked[id] != "" {
+			continue
+		}
+		if item.runtime == nil && item.loadErr != "" {
 			continue
 		}
 		out = append(out, PluginSummary{
@@ -460,19 +764,24 @@ func (m *Manager) EnabledPlugins() []PluginSummary {
 	return out
 }
 
-// RuntimeHandlers 返回指定插件已注册的 handler 名（供诊断）。
-func (m *Manager) RuntimeHandlers(id string) []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if item, ok := m.loaded[id]; ok && item.runtime != nil {
-		return item.runtime.Handlers()
+// ---------------------------------------------------------------- 工具
+
+// firstUnloadedDep 返回清单里第一个尚未成功加载的依赖。
+func firstUnloadedDep(mf *Manifest, loaded map[string]struct{}) string {
+	for _, dep := range mf.SortedDependencies() {
+		if _, ok := loaded[dep.ID]; !ok {
+			return dep.ID
+		}
 	}
-	return nil
+	return ""
 }
 
-// PluginManifest 返回已安装插件的当前清单（未安装返回 nil）。
-func (m *Manager) PluginManifest(id string) *Manifest {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.manifests[id]
+// sortedKeys 泛化的 map 键排序。
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
