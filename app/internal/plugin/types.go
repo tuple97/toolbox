@@ -98,6 +98,9 @@ type MissingDependency struct {
 type PackageInput struct {
 	// Source 来源：registry / url / file / local / archive
 	Source string `json:"source"`
+	// SourceURL registry 来源时指定的插件源地址；留空表示跨全部已启用来源
+	// 自动挑选提供该插件（且版本最高）的那个来源。
+	SourceURL string `json:"sourceUrl"`
 	// ID registry 来源时必填
 	ID string `json:"id"`
 	// Version registry 来源时可选，缺省取满足约束的最高版本
@@ -146,8 +149,10 @@ type PlanItem struct {
 	SourceRef string `json:"sourceRef"`
 	// Checksum 安装包摘要
 	Checksum string `json:"checksum"`
-	// Official 是否官方索引条目
+	// Official 是否可信的官方条目（= 索引声明 official 且该来源验签通过）
 	Official bool `json:"official"`
+	// SourceVerified 该条目所在来源的索引是否验签通过
+	SourceVerified bool `json:"sourceVerified"`
 	// Root 是否为用户显式选择的包
 	Root bool `json:"root"`
 	// NeedTrust 是否需要用户确认信任
@@ -188,6 +193,8 @@ type InstallPreview struct {
 type PackageInputWire struct {
 	// Source 来源：registry / url / file / local / archive
 	Source string `json:"source"`
+	// SourceURL registry 来源时指定的插件源地址；留空表示自动跨源挑选
+	SourceURL string `json:"sourceUrl"`
 	// ID registry 来源时的插件标识
 	ID string `json:"id"`
 	// Version registry 来源时可选，缺省取满足约束的最高版本
@@ -202,17 +209,26 @@ type PackageInputWire struct {
 
 // UpdateInfo 单个插件的可用更新。
 type UpdateInfo struct {
-	ID               string   `json:"id"`
-	Name             string   `json:"name"`
-	CurrentVersion   string   `json:"currentVersion"`
-	LatestVersion    string   `json:"latestVersion"`
-	Official         bool     `json:"official"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	CurrentVersion string `json:"currentVersion"`
+	LatestVersion  string `json:"latestVersion"`
+	// Official 是否可信的官方条目（= 索引声明 official 且来源验签通过）
+	Official bool `json:"official"`
+	// SourceURL / SourceName 提供该最新版本的插件源
+	SourceURL  string `json:"sourceUrl"`
+	SourceName string `json:"sourceName"`
+	// SourceVerified 提供该版本的来源是否验签通过
+	SourceVerified   bool     `json:"sourceVerified"`
 	AddedPermissions []string `json:"addedPermissions"`
 	// CanAutoUpgrade 权限未扩张且来源已信任时可静默升级
 	CanAutoUpgrade bool `json:"canAutoUpgrade"`
 }
 
 // MarketplaceItem 插件市场列表项（已安装状态与本地对比后的结果）。
+//
+// 同一个插件在多个来源都存在时会各占一条 —— 这样界面能并排看到
+// 「官方源 v1.2.0」与「第三方源 v1.3.0」的差异。
 type MarketplaceItem struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -221,7 +237,13 @@ type MarketplaceItem struct {
 	Description string `json:"description"`
 	Icon        string `json:"icon"`
 	Homepage    string `json:"homepage"`
-	Official    bool   `json:"official"`
+	// Official 是否可信的官方条目（= 索引声明 official 且来源验签通过）
+	Official bool `json:"official"`
+	// SourceURL / SourceName 该条目来自哪个插件源
+	SourceURL  string `json:"sourceUrl"`
+	SourceName string `json:"sourceName"`
+	// SourceVerified 该条目所在来源是否验签通过
+	SourceVerified bool `json:"sourceVerified"`
 
 	Installed        bool     `json:"installed"`
 	InstalledVersion string   `json:"installedVersion"`
@@ -232,20 +254,49 @@ type MarketplaceItem struct {
 	Dependencies     []string `json:"dependencies"`
 }
 
+// MarketplaceSource 单个插件源在本轮快照中的状态。
+type MarketplaceSource struct {
+	URL  string `json:"url"`
+	Name string `json:"name"`
+	// Enabled 是否参与合并展示
+	Enabled bool `json:"enabled"`
+	// Official 是否为宿主内置的官方源（只有它会被强制要求验签）
+	Official bool `json:"official"`
+	// State ready / error / disabled
+	State string `json:"state"`
+	// Verified 索引签名是否校验通过
+	Verified bool `json:"verified"`
+	// UpdatedAt 索引自带更新时间
+	UpdatedAt string `json:"updatedAt"`
+	// Count 该来源提供的插件条目数
+	Count int `json:"count"`
+	// Error 读取失败原因
+	Error string `json:"error"`
+}
+
 // MarketplaceSnapshot 插件市场快照。
 type MarketplaceSnapshot struct {
 	// State idle / ready / error
+	//
+	// ready 表示至少有一个来源读到了索引；error 表示所有已启用来源都失败；
+	// idle 表示没有任何已启用的来源。
 	State string `json:"state"`
-	// Source 索引地址
-	Source string `json:"source"`
-	// UpdatedAt 索引自带更新时间
-	UpdatedAt string `json:"updatedAt"`
-	// Verified 索引签名是否校验通过
-	Verified bool `json:"verified"`
+	// Sources 各插件源的状态（含被禁用的，便于界面管理）
+	Sources []MarketplaceSource `json:"sources"`
 	// SignatureEnabled 宿主是否配置了索引签名公钥
 	SignatureEnabled bool `json:"signatureEnabled"`
-	// Error 加载失败原因
+	// Error 汇总的加载失败原因
 	Error string `json:"error"`
-	// Items 条目列表
+	// Items 合并后的条目列表（按来源区分，不去重）
 	Items []MarketplaceItem `json:"items"`
+}
+
+// RegistrySource 一个插件源（索引地址）。
+type RegistrySource struct {
+	// URL 索引地址（registry.json 的完整地址）
+	URL string `json:"url"`
+	// Name 展示名；留空时界面回落到地址
+	Name string `json:"name,omitempty"`
+	// Enabled 是否参与合并展示
+	Enabled bool `json:"enabled"`
 }

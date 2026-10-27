@@ -19,22 +19,27 @@ import Dialog from '@/components/ui/Dialog.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import Input from '@/components/ui/Input.vue'
+import MultiSelect from '@/components/ui/MultiSelect.vue'
 import Switch from '@/components/ui/Switch.vue'
 import Tag from '@/components/ui/Tag.vue'
 import { pickDirectories, pickFiles } from '@/api/dialog'
 import { readFileAsBase64 } from '@/api/plugins'
 import { pluginLoadError } from '@/plugins/loader'
 import { usePluginStore } from '@/stores/pluginStore'
+import { useTabStore } from '@/stores/tabStore'
 import { askConfirm } from '@/utils/confirm'
 import { notify } from '@/utils/notify'
+import { openSettingPanel } from '@/utils/settingsNav'
+import type { MultiSelectOption } from '@/components/ui/MultiSelect.vue'
 import type {
   ContextMenuAction,
   InstalledPlugin,
-  PluginInstallPlanItem,
   PluginInstallPreview,
-  PluginInstallRequest,
   PluginInstallSource,
   PluginMarketplaceItem,
+  PluginPackageInput,
+  PluginPackagePreview,
+  PluginPlanItem,
 } from '@/types'
 
 const emit = defineEmits<{ (e: 'ready'): void }>()
@@ -74,33 +79,31 @@ const menuPluginId = ref('')
 // ------------------------------------------------------------ 安装确认
 
 /**
- * 一个待安装项。
+ * 一次安装 = 一批包输入 + 一份安装计划。
  *
- * 两种来源共用同一条确认流程与同一个弹窗：
- *   - 市场安装：带 request（后端按 id 去索引取包）；
- *   - 离线包安装：带文件名与 base64 内容（拖拽 / 多选文件进来）。
- * 让「信任」与「权限」这两道关卡只写一次，避免两条路径策略分叉。
+ * 四种来源共用同一条确认流程与同一个弹窗：
+ *   - 市场安装：source = registry，带 sourceUrl + id（+ version）；
+ *   - 网络地址 / 本地路径：带 ref；
+ *   - 拖拽或文件选择进来的离线包：带 fileName + base64 内容。
+ *
+ * 后端按「整批」一次性求解依赖闭包，因此批量包的相互依赖由后端处理，
+ * 前端只需要把输入凑齐、把计划摊开给用户确认。
  */
-interface PendingInstall {
-  /** 基本信息（本地读取，先到）：卡片先用它渲染 */
-  info: PluginInstallPreview | null
-  /** 含依赖计划的完整预览（可能联网求解，后到） */
-  preview: PluginInstallPreview | null
-  /** 依赖解析失败的原因；不影响安装，单独展示 */
-  depsError?: string
-  /** 读取基本信息失败的原因 */
-  error?: string
-  /** 读取期间展示的标识：本地路径或安装包文件名 */
-  label: string
-  request?: PluginInstallRequest
-  fileName?: string
-  contentBase64?: string
-}
+/** 待安装的包输入 */
+const pendingInputs = ref<PluginPackageInput[]>([])
+/** 各输入的展示名（本地路径 / 包文件名），只用于读取期间的占位文案 */
+const pendingLabels = ref<string[]>([])
+/** 基本信息（本地读取，毫秒级）：卡片先用它渲染 */
+const basicPreview = ref<PluginInstallPreview | null>(null)
+/** 含依赖计划的完整预览（可能联网求解，后到）：planId 在这里 */
+const planPreview = ref<PluginInstallPreview | null>(null)
+/** 读取基本信息失败的原因 */
+const basicError = ref('')
+/** 求解依赖计划失败的原因；计划是安装的前提，失败时无法提交 */
+const planError = ref('')
 
 /** 确认弹窗可见 */
 const previewVisible = ref(false)
-/** 待安装队列（离线包可一次拖入多个） */
-const pendingItems = ref<PendingInstall[]>([])
 /** 用户已勾选「信任该来源」 */
 const trustConfirmed = ref(false)
 /** 用户已勾选「接受新增权限」 */
@@ -113,35 +116,45 @@ const dragging = ref(false)
 /** 拖拽进出计数：子元素也会触发 dragleave，用计数避免高亮闪烁 */
 let dragDepth = 0
 
+/** 弹窗里的卡片：求解后以完整预览为准，否则先用基本信息 */
+const previewPackages = computed<PluginPackagePreview[]>(() =>
+  planPreview.value?.packages ?? basicPreview.value?.packages ?? [])
+
 /** 确认弹窗标题 */
 const confirmTitle = computed(() => {
-  if (pendingItems.value.length > 1) {
-    return `确认安装 ${pendingItems.value.length} 个插件`
+  const count = previewPackages.value.length || pendingInputs.value.length
+  if (count > 1) {
+    return `确认安装 ${count} 个插件`
   }
-  return pendingItems.value[0]?.info?.upgrade ? '确认升级' : '确认安装'
+  return previewPackages.value[0]?.upgrade ? '确认升级' : '确认安装'
 })
 
-/** 队列中是否存在需要用户确认信任的项（模板里用箭头函数会丢类型，这里集中算） */
-const needsTrustConfirm = computed(() =>
-  pendingItems.value.some(item => item.info?.needTrust === true),
-)
+/** 计划里由依赖带出来的条目（用户并未显式选择的那部分） */
+const previewDependencies = computed<PluginPlanItem[]>(() =>
+  (planPreview.value?.plan ?? []).filter(item => !item.root))
 
-/** 队列中全部新增权限（去重） */
-const mergedAddedPermissions = computed(() => {
-  const set = new Set<string>()
-  for (const item of pendingItems.value) {
-    for (const permission of item.info?.addedPermissions ?? []) {
-      set.add(permission)
-    }
-  }
-  return Array.from(set)
-})
+/** 风险提示：求解后更全（含未验签数量与待下载数量） */
+const previewWarnings = computed<string[]>(() =>
+  planPreview.value?.warnings ?? basicPreview.value?.warnings ?? [])
 
-/** 已完成校验的条目 */
-const readyItems = computed<ReadyInstall[]>(() =>
-  pendingItems.value.filter(
-    (item): item is ReadyInstall => Boolean(item.info) && !item.error,
-  ))
+/** 本次需要用户确认的新增权限（后端已按整批去重） */
+const mergedAddedPermissions = computed<string[]>(() => planPreview.value?.addedPermissions ?? [])
+
+/** 是否需要用户确认信任来源 */
+const needsTrustConfirm = computed(() => planPreview.value?.needTrust === true)
+
+/** 需要确认信任的原因（后端的判定依据） */
+const trustReason = computed(() => planPreview.value?.trustReason ?? '')
+
+/** 是否已经拿到可直接提交的安装计划 */
+const hasPlan = computed(() => Boolean(planPreview.value?.planId))
+
+/**
+ * 是否还在求解依赖计划。
+ *
+ * 只在读到基本信息之后才有意义：清单都还没读出来时谈「解析依赖」没有意义。
+ */
+const resolvingPlan = computed(() => !hasPlan.value && !planError.value)
 
 // ------------------------------------------------------------ 手动安装
 
@@ -152,12 +165,50 @@ const manualSource = ref<PluginInstallSource>('local')
 /** 手动安装的路径或地址 */
 const manualRef = ref('')
 
-// ------------------------------------------------------------ 索引地址
+// ------------------------------------------------------------ 来源过滤
 
-/** 索引地址输入框 */
-const registryInput = ref('')
-/** 是否处于编辑索引地址状态 */
-const editingRegistry = ref(false)
+/**
+ * 市场页来源过滤（多选）。
+ *
+ * 不选即不过滤，等价于「查询全部已启用来源」——因此不需要再额外提供一个
+ * 「合并全部来源」的选项，清空选择就是那个语义。
+ */
+const marketFilter = computed({
+  get: () => store.marketFilter,
+  set: (value: string[]) => { store.marketFilter = value },
+})
+
+/** 来源多选选项：各个已配置来源（含已停用的，便于看出挂过哪些源） */
+const sourceOptions = computed<MultiSelectOption[]>(() =>
+  store.marketSources.map((source) => {
+    const label = source.name || source.url
+    return {
+      // 多选下拉只显示一行文字，停用状态只能拼进标签里
+      label: source.enabled ? label : `${label}（已停用）`,
+      value: source.url,
+    }
+  }))
+
+/** 只勾选了一个来源时的来源状态；未选或选了多个时为 null */
+const activeSource = computed(() => {
+  const picked = marketFilter.value
+  if (picked.length !== 1) {
+    return null
+  }
+  return store.marketSources.find(source => source.url === picked[0]) ?? null
+})
+
+/** 当前来源的验签提示：只在「验签已开启却没过」时提醒 */
+const activeSourceWarning = computed(() => {
+  const source = activeSource.value
+  if (!source || source.state !== 'ready') {
+    return ''
+  }
+  if (!store.marketplace.signatureEnabled) {
+    return '未启用签名校验'
+  }
+  return source.verified ? '' : '该来源未验签'
+})
 
 // ------------------------------------------------------------ 生命周期
 
@@ -173,9 +224,7 @@ onMounted(() => {
   emit('ready')
 
   void store.refreshInstalled()
-  void store.loadRegistryUrl().then(() => {
-    registryInput.value = store.registryUrl
-  })
+  void store.loadSources()
   void store.loadMarketplace()
 })
 
@@ -186,15 +235,28 @@ watch(activeTab, (tab) => {
   }
 })
 
+// 关掉确认弹窗就丢掉这一批输入：计划已经作废，留着只会在下次打开时误导人
+watch(previewVisible, (visible) => {
+  if (!visible) {
+    resetPending()
+  }
+})
+
 // ------------------------------------------------------------ 派生数据
 
-/** 过滤后的市场条目 */
+/**
+ * 过滤后的市场条目。
+ *
+ * store.marketItems 已经按来源下拉做过一次过滤（合并 / 单源），
+ * 这里只再叠加关键字搜索。
+ */
 const marketItems = computed(() => {
   const keyword = search.value.trim().toLowerCase()
+  const base = store.marketItems
   if (!keyword) {
-    return store.marketplace.items
+    return base
   }
-  return store.marketplace.items.filter(item =>
+  return base.filter(item =>
     item.name.toLowerCase().includes(keyword)
     || item.id.toLowerCase().includes(keyword)
     || item.description.toLowerCase().includes(keyword)
@@ -449,17 +511,6 @@ async function handleUninstallSelected(): Promise<void> {
   notify.success(`已卸载 ${ids.length} 个插件`)
 }
 
-/** 已读到基本信息的待安装项 */
-type ReadyInstall = PendingInstall & { info: PluginInstallPreview }
-
-/** 待安装项的依赖（安装计划里排除主包自身；未完成校验时返回空） */
-function dependenciesOf(preview: PluginInstallPreview | null): PluginInstallPlanItem[] {
-  if (!preview) {
-    return []
-  }
-  return preview.plan.filter(item => item.id !== preview.id)
-}
-
 /** 某条依赖未满足的原因；已满足时返回空串 */
 function missingReasonOf(plugin: InstalledPlugin, depId: string): string {
   return plugin.missingDependencies.find(item => item.id === depId)?.reason ?? ''
@@ -468,56 +519,31 @@ function missingReasonOf(plugin: InstalledPlugin, depId: string): string {
 /**
  * 依赖的状态标签。
  *
- * 「自动扫描」用于安装时从同级目录扫出来的依赖：它不是用户显式选中的，
- * 也不在官方索引里，标成「新装」会让人误以为是去市场下载的。
+ * 计划由后端按依赖在前排好序，这里只负责把动作翻译成人话；
+ * 非 root 的条目会额外标出「依赖」，免得被当成用户自己选的包。
  */
-function dependencyTag(dep: PluginInstallPlanItem): { text: string, tone: 'info' | 'success' | 'warning' | 'brand' } {
-  if (dep.action === 'keep') {
-    return { text: '已安装', tone: 'success' }
+function dependencyTag(dep: PluginPlanItem): { text: string, tone: 'info' | 'success' | 'warning' | 'brand' } {
+  switch (dep.action) {
+    case 'keep':
+      return { text: '已安装', tone: 'success' }
+    case 'upgrade':
+      return { text: '升级', tone: 'warning' }
+    case 'reinstall':
+      return { text: '重装', tone: 'info' }
+    default:
+      return { text: '新装', tone: 'brand' }
   }
-  if (dep.scanned) {
-    return { text: '自动扫描', tone: 'info' }
-  }
-  if (dep.action === 'upgrade') {
-    return { text: '升级', tone: 'warning' }
-  }
-  return { text: '新装', tone: 'brand' }
 }
 
 /**
- * 按依赖顺序排列待安装项。
+ * 某个包的来源索引是否验签通过；计划还没求解出来时返回 null（不显示标签）。
  *
- * 后端在单次安装内求解依赖闭包，因此一次选中多个互相依赖的插件时，
- * 被依赖者必须先落地 —— 否则先装的那个会因为「依赖未安装」而失败。
- * 这里按各插件声明的依赖做一次拓扑排序；出现环时保持原顺序，不做死循环。
+ * 签名状态只存在于依赖计划的条目上（PackagePreview 里没有），
+ * 因此求解前不该给卡片贴上「未签名」这种会误导人的结论。
  */
-function sortByDependencies(items: ReadyInstall[]): ReadyInstall[] {
-  const byId = new Map(items.map(item => [item.info.id, item]))
-  const result: ReadyInstall[] = []
-  const visiting = new Set<string>()
-  const done = new Set<string>()
-
-  const visit = (item: ReadyInstall): void => {
-    const id = item.info.id
-    if (done.has(id) || visiting.has(id)) {
-      return
-    }
-    visiting.add(id)
-    for (const dep of item.info.dependencies) {
-      const target = byId.get(dep.id)
-      if (target) {
-        visit(target)
-      }
-    }
-    visiting.delete(id)
-    done.add(id)
-    result.push(item)
-  }
-
-  for (const item of items) {
-    visit(item)
-  }
-  return result
+function sourceVerifiedOf(id: string): boolean | null {
+  const item = planPreview.value?.plan.find(entry => entry.id === id)
+  return item ? item.sourceVerified : null
 }
 
 /** 来源的中文说明 */
@@ -586,10 +612,32 @@ function statusTags(plugin: InstalledPlugin): Array<{ text: string, tone: 'info'
 
 // ------------------------------------------------------------ 已安装操作
 
-/** 切换启用状态 */
+/**
+ * 切换启用状态。
+ *
+ * 停用被依赖的插件会被后端拒绝，所以先把「谁会受影响」讲清楚再级联停用，
+ * 而不是让用户点一次、吃一个报错、再点一次。
+ */
 async function handleToggleEnabled(plugin: InstalledPlugin, enabled: boolean): Promise<void> {
+  const cascade = !enabled && plugin.inUseBy.length > 0
+  if (cascade) {
+    const confirmed = await askConfirm({
+      message: `「${plugin.name}」正被 ${plugin.inUseBy.map(pluginName).join('、')} 依赖。`
+        + '停用它会把这些插件一并停用（插件保留，可随时重新启用）。确定继续吗？',
+      title: '级联停用',
+      confirmText: '一并停用',
+    })
+    if (!confirmed) {
+      return
+    }
+  }
   try {
-    await store.setEnabled(plugin.id, enabled)
+    const affected = await store.setEnabled(plugin.id, enabled, cascade)
+    const others = affected.filter(id => id !== plugin.id)
+    if (!enabled && others.length > 0) {
+      notify.success(`已停用 ${plugin.name}，并一并停用 ${others.map(pluginName).join('、')}`)
+      return
+    }
     notify.success(enabled ? `已启用 ${plugin.name}` : `已停用 ${plugin.name}`)
   }
   catch (e) {
@@ -685,78 +733,78 @@ async function handleReload(): Promise<void> {
 
 // ------------------------------------------------------------ 安装流程
 
-/** 重置确认态：官方来源、权限未扩张时默认勾选，减少无谓点击 */
-function resetConfirmState(items: PendingInstall[]): void {
-  const scanned = items.filter(item => Boolean(item.info))
-  trustConfirmed.value = scanned.length > 0
-    && scanned.length === items.length
-    && scanned.every(item => item.info?.official === true)
-  permissionsAccepted.value = items.length > 0
-    && items.every(item => (item.info?.addedPermissions.length ?? 0) === 0)
+/**
+ * 重置确认态：不需要确认的都默认勾上，减少无谓点击。
+ *
+ * 只能在拿到计划后调用 —— 信任与权限是整批求解出来的结论，
+ * 求解前无从判断（基本信息里没有这两项）。
+ */
+function resetConfirmState(preview: PluginInstallPreview | null): void {
+  trustConfirmed.value = preview ? !preview.needTrust : false
+  permissionsAccepted.value = preview ? preview.addedPermissions.length === 0 : false
 }
 
-/** 读取单项的基本信息（本地完成，毫秒级） */
-async function loadBasic(item: PendingInstall, index: number): Promise<void> {
-  try {
-    if (item.request) {
-      pendingItems.value[index].info = await store.previewBasic(item.request)
-      return
-    }
-    if (item.fileName && item.contentBase64) {
-      pendingItems.value[index].info = await store.previewArchiveBasic(item.fileName, item.contentBase64)
-    }
-  }
-  catch (e) {
-    pendingItems.value[index].error = e instanceof Error ? e.message : String(e)
-  }
+/** 清空待安装状态（关弹窗 / 装完之后） */
+function resetPending(): void {
+  pendingInputs.value = []
+  pendingLabels.value = []
+  basicPreview.value = null
+  planPreview.value = null
+  basicError.value = ''
+  planError.value = ''
+  trustConfirmed.value = false
+  permissionsAccepted.value = false
 }
 
-/** 解析单项的依赖计划（可能联网，较慢） */
-async function loadPlan(item: PendingInstall, index: number): Promise<void> {
+/**
+ * 求解依赖计划。
+ *
+ * 计划是安装的唯一凭据，因此这一步是必须的：失败就没有 planId，
+ * 也就无法提交安装（重试请重新打开预览）。
+ */
+async function resolvePlan(): Promise<void> {
+  if (pendingInputs.value.length === 0) {
+    return
+  }
+  planError.value = ''
   try {
-    if (item.request) {
-      pendingItems.value[index].preview = await store.preview(item.request)
-      return
-    }
-    if (item.fileName && item.contentBase64) {
-      pendingItems.value[index].preview = await store.previewArchive(item.fileName, item.contentBase64)
-    }
+    const preview = await store.previewPackages(pendingInputs.value, { resolveDependencies: true })
+    planPreview.value = preview
+    resetConfirmState(preview)
   }
   catch (e) {
-    pendingItems.value[index].depsError = e instanceof Error ? e.message : String(e)
+    planError.value = e instanceof Error ? e.message : String(e)
   }
 }
 
 /**
- * 把待安装项推进队列，分两步补全信息。
+ * 把一批包输入推进确认弹窗，分两步补全信息。
  *
- * 第一步（基本信息）只读本地清单，毫秒级返回 —— 卡片可以立刻出来；
- * 第二步（依赖计划）可能要访问官方索引，慢得多，只影响依赖那一栏。
- *
- * 所有赋值都必须走 pendingItems.value[index]：ref 会深代理数组，
- * 直接改闭包里的原始对象不会触发更新（曾导致界面永远停在转圈状态）。
+ * 第一步（基本信息）只读清单，毫秒级返回 —— 卡片可以立刻出来；
+ * 第二步（依赖计划）要访问插件源，慢得多，但它决定「能不能装」，
+ * 所以按钮在这之前一直是禁用的。
  */
-async function loadPendingItems(items: PendingInstall[]): Promise<void> {
-  pendingItems.value = items
-  resetConfirmState(pendingItems.value)
+async function loadPendingInputs(inputs: PluginPackageInput[], labels: string[]): Promise<void> {
+  resetPending()
+  pendingInputs.value = inputs
+  pendingLabels.value = labels
   previewVisible.value = true
 
-  await Promise.all(pendingItems.value.map((item, index) => loadBasic(item, index)))
-  resetConfirmState(pendingItems.value)
+  try {
+    basicPreview.value = await store.previewPackages(inputs)
+  }
+  catch (e) {
+    basicError.value = e instanceof Error ? e.message : String(e)
+    // 基本信息都读不到就没什么可确认的了，不必再空跑一次依赖求解
+    return
+  }
 
-  await Promise.all(pendingItems.value.map((item, index) =>
-    pendingItems.value[index].info ? loadPlan(item, index) : Promise.resolve(),
-  ))
+  await resolvePlan()
 }
 
-/** 打开市场安装预览 */
-async function openPreview(req: PluginInstallRequest): Promise<void> {
-  await loadPendingItems([{
-    info: null,
-    preview: null,
-    label: req.id || req.ref || '插件',
-    request: req,
-  }])
+/** 打开安装预览（市场 / 手动填写的地址或路径都走这里） */
+async function openPreview(input: PluginPackageInput): Promise<void> {
+  await loadPendingInputs([input], [input.fileName || input.ref || input.id || '插件'])
 }
 
 /** 打开离线包的安装预览（支持一次多个文件，拖拽进来的） */
@@ -765,48 +813,49 @@ async function openArchivePreview(files: File[]): Promise<void> {
     return
   }
 
-  const items: PendingInstall[] = []
+  const inputs: PluginPackageInput[] = []
+  const labels: string[] = []
+  const failed: string[] = []
   for (const file of files) {
     try {
       const contentBase64 = await readFileAsBase64(file)
-      items.push({
-        info: null,
-        preview: null,
-        label: file.name,
+      inputs.push({
+        source: 'archive',
+        ref: file.name,
         fileName: file.name,
         contentBase64,
       })
+      labels.push(file.name)
     }
     catch (e) {
-      items.push({
-        info: null,
-        preview: null,
-        label: file.name,
-        error: e instanceof Error ? e.message : String(e),
-      })
+      failed.push(`${file.name}：${e instanceof Error ? e.message : String(e)}`)
     }
   }
 
-  await loadPendingItems(items)
+  if (failed.length > 0) {
+    notify.error(`读取插件包失败：${failed.join('；')}`)
+  }
+  if (inputs.length === 0) {
+    return
+  }
+  await loadPendingInputs(inputs, labels)
 }
 
 /**
  * 从本地路径批量预览安装。
  *
- * 走 request 分派（source + ref），后端直接按路径读取，
- * 因此系统选择器选出的多个目录 / 安装包可以一次全部预览。
+ * 只把路径交给后端（source + ref），由后端读取文件，
+ * 因此系统选择器选出的多个目录 / 安装包可以一次全部提交。
  */
 async function openPathPreview(source: PluginInstallSource, paths: string[]): Promise<void> {
   if (paths.length === 0) {
     return
   }
 
-  await loadPendingItems(paths.map(path => ({
-    info: null,
-    preview: null,
-    label: path,
-    request: { source, ref: path, trust: false, acceptPermissions: false },
-  })))
+  await loadPendingInputs(
+    paths.map(path => ({ source, ref: path })),
+    paths,
+  )
 }
 
 /**
@@ -876,10 +925,11 @@ async function handleDrop(event: DragEvent): Promise<void> {
 function handleInstallFromMarket(item: PluginMarketplaceItem): void {
   void openPreview({
     source: 'registry',
+    // 同名插件在多个来源各占一条，必须把用户点中的那一条的来源带上，
+    // 否则后端只会跨源取「最高版本」，装的可能不是他看的那一条
+    sourceUrl: item.sourceUrl,
     id: item.id,
     version: item.version,
-    trust: false,
-    acceptPermissions: false,
   })
 }
 
@@ -891,10 +941,9 @@ function handleUpgrade(item: InstalledPlugin): void {
   }
   void openPreview({
     source: 'registry',
+    sourceUrl: update.sourceUrl,
     id: item.id,
     version: update.latestVersion,
-    trust: true,
-    acceptPermissions: false,
   })
 }
 
@@ -916,102 +965,71 @@ function submitManual(): void {
   void openPreview({
     source: manualSource.value,
     ref,
-    trust: false,
-    acceptPermissions: false,
   })
 }
 
-/** 是否可以确认安装 */
+/**
+ * 是否可以确认安装。
+ *
+ * 关键是必须已经拿到安装计划：安装只认 planId，没有计划就没得提交。
+ * 两道关卡则按计划给出的整批结论判断（批量安装沿用同一决定）。
+ */
 const canConfirm = computed(() => {
-  const items = pendingItems.value
-  if (items.length === 0) {
+  const plan = planPreview.value
+  if (!plan || !plan.planId) {
     return false
   }
-  // 还在读基本信息、或读取失败时不允许提交。
-  // 依赖计划解析慢（可能联网），但它不影响安装的正确性 —— 不阻塞确认。
-  if (items.some(item => !item.info || item.error)) {
+  if (plan.needTrust && !trustConfirmed.value) {
     return false
   }
-  // 任一插件需要信任确认，就必须整体勾选（批量安装沿用同一决定）
-  if (items.some(item => item.info?.needTrust) && !trustConfirmed.value) {
-    return false
-  }
-  if (items.some(item => (item.info?.addedPermissions.length ?? 0) > 0) && !permissionsAccepted.value) {
+  if (plan.addedPermissions.length > 0 && !permissionsAccepted.value) {
     return false
   }
   return true
 })
 
-/** 确认安装：市场单项 或 离线包批量 */
+/** 确认安装：按已确认的计划提交，成功与否都会作废该计划 */
 async function confirmInstall(): Promise<void> {
-  const items = pendingItems.value
-  if (items.length === 0 || !canConfirm.value) {
+  const plan = planPreview.value
+  if (!plan?.planId || !canConfirm.value) {
     return
   }
   installing.value = true
   try {
-    const ready = readyItems.value
+    await store.installPlan(plan.planId, trustConfirmed.value, permissionsAccepted.value)
 
-    const archives = ready.filter(
-      (item): item is ReadyInstall & { fileName: string, contentBase64: string } =>
-        Boolean(item.fileName && item.contentBase64),
-    )
+    const count = previewPackages.value.length
+    notify.success(count > 1
+      ? `已安装 ${count} 个插件`
+      : `已安装 ${previewPackages.value[0]?.name ?? '插件'}`)
 
-    if (archives.length > 0) {
-      await store.installArchives(
-        archives.map(item => ({ fileName: item.fileName, contentBase64: item.contentBase64 })),
-        trustConfirmed.value,
-        permissionsAccepted.value,
-      )
-    }
-
-    // 本地路径 / 网络地址 / 市场来源都走 request 分派；
-    // 一次选中多个时先按依赖排序（被依赖者先装），再交给 installAll 统一收尾
-    const requests = sortByDependencies(ready)
-      .map(item => item.request)
-      .filter((req): req is PluginInstallRequest => Boolean(req))
-
-    if (requests.length > 0) {
-      await store.installAll(requests, trustConfirmed.value, permissionsAccepted.value)
-    }
-
-    notify.success(
-      ready.length > 1
-        ? `已安装 ${ready.length} 个插件`
-        : `已安装 ${ready[0]?.info.name ?? '插件'}`,
-    )
-
+    // 关窗由 previewVisible 的 watcher 负责清空这批输入（计划已作废）
     previewVisible.value = false
-    pendingItems.value = []
     // 市场快照刷新要拉网络索引（最长 12s）：放后台跑，装完就该立刻能继续操作，
     // 不能让弹窗一直停在「安装中」
     void store.loadMarketplace()
   }
   catch (e) {
     notify.error(e instanceof Error ? e.message : String(e))
+    /*
+     * 计划是一次性的：后端在取出计划时就删掉了它，因此安装只要失败
+     * （下载失败、信任关卡拒绝……），手里这个 planId 就已经作废。
+     * 直接重新求解，用户改一下勾选就能重试，而不是对着一个装不动的计划反复点。
+     */
+    planPreview.value = null
+    await resolvePlan()
   }
   finally {
     installing.value = false
   }
 }
 
-// ------------------------------------------------------------ 索引地址
+// ------------------------------------------------------------ 来源管理
 
-/** 保存索引地址 */
-async function saveRegistry(): Promise<void> {
-  const url = registryInput.value.trim()
-  if (!url) {
-    notify.warning('索引地址不能为空')
-    return
-  }
-  try {
-    await store.updateRegistryUrl(url)
-    editingRegistry.value = false
-    notify.success('索引地址已更新')
-  }
-  catch (e) {
-    notify.error(e instanceof Error ? e.message : String(e))
-  }
+/** 插件源的新增 / 删除 / 启停统一在设置页完成：跳过去并直接打开「插件源」面板 */
+function openSourceSettings(): void {
+  openSettingPanel('plugins')
+  useTabStore().showSingleton('settings')
 }
 </script>
 
@@ -1191,21 +1209,23 @@ async function saveRegistry(): Promise<void> {
             class="plugin-market__search"
           />
           <div class="plugin-market__source">
-            <template v-if="editingRegistry">
-              <Input v-model="registryInput" size="sm" class="plugin-market__source-input" />
-              <Button size="sm" @click="saveRegistry">保存</Button>
-              <Button variant="ghost" size="sm" @click="editingRegistry = false">取消</Button>
-            </template>
-            <template v-else>
-              <span class="plugin-market__source-text" :title="store.registryUrl">
-                索引：{{ store.registryUrl || '未配置' }}
-              </span>
-              <Button variant="ghost" size="sm" @click="editingRegistry = true">修改</Button>
-              <Button variant="ghost" size="sm" :disabled="store.busy" @click="store.loadMarketplace(true)">
-                <Icon name="refresh" />
-                刷新索引
-              </Button>
-            </template>
+            <!-- 多选来源：不选就是查询全部已启用来源 -->
+            <MultiSelect
+              v-model="marketFilter"
+              :options="sourceOptions"
+              placeholder="全部来源"
+              search-placeholder="搜索来源…"
+              size="sm"
+              class="plugin-market__source-select"
+            />
+            <Tag v-if="activeSourceWarning" tone="warning" effect="plain" size="sm">
+              {{ activeSourceWarning }}
+            </Tag>
+            <Button variant="ghost" size="sm" @click="openSourceSettings">管理来源</Button>
+            <Button variant="ghost" size="sm" :disabled="store.busy" @click="store.loadMarketplace(true)">
+              <Icon name="refresh" />
+              刷新索引
+            </Button>
           </div>
         </div>
 
@@ -1226,7 +1246,8 @@ async function saveRegistry(): Promise<void> {
         />
 
         <ul v-else class="plugin-list">
-          <li v-for="item in marketItems" :key="item.id" class="plugin-card">
+          <!-- key 必须带上来源：同名插件在多个来源各占一条 -->
+          <li v-for="item in marketItems" :key="`${item.sourceUrl}::${item.id}`" class="plugin-card">
             <div class="plugin-card__main">
               <div class="plugin-card__icon">
                 <Icon :name="item.icon || 'puzzle'" />
@@ -1245,6 +1266,11 @@ async function saveRegistry(): Promise<void> {
                 <p class="plugin-card__desc">{{ item.description || '该插件未提供描述' }}</p>
                 <div class="plugin-card__meta">
                   <span>{{ item.publisher }}</span>
+                  <span class="plugin-card__dot">·</span>
+                  <!-- 合并展示时同名插件会有多条，必须标明各自来自哪个来源 -->
+                  <span class="plugin-card__source-name" :title="item.sourceUrl">
+                    来源：{{ item.sourceName || item.sourceUrl }}
+                  </span>
                   <span v-if="item.dependencies.length" class="plugin-card__dot">·</span>
                   <span v-if="item.dependencies.length">依赖 {{ item.dependencies.join('、') }}</span>
                 </div>
@@ -1294,121 +1320,111 @@ async function saveRegistry(): Promise<void> {
     <!-- ------------------------------------------------ 安装确认弹窗 -->
     <Dialog v-model="previewVisible" :title="confirmTitle" :width="580">
       <div class="plugin-preview">
-        <!-- 待安装清单：离线包可一次拖入多个 -->
-        <div
-          v-for="(entry, index) in pendingItems"
-          :key="`${entry.label}-${index}`"
-          class="plugin-preview__item"
-          :class="{ 'is-error': entry.error }"
-        >
-          <!-- 读不到基本信息才算失败；依赖还没解析完不算 -->
-          <div v-if="!entry.info" class="plugin-preview__scan">
-            <span v-if="!entry.error" class="plugin-preview__spinner" aria-hidden="true" />
-            <Icon v-else name="alert-triangle" />
-            <span>{{ entry.error || `正在读取 ${entry.label}…` }}</span>
+        <!-- 一批包全部读不出来：直接说原因，没什么可确认的 -->
+        <div v-if="basicError" class="plugin-preview__item is-error">
+          <div class="plugin-preview__scan">
+            <Icon name="alert-triangle" />
+            <span>{{ basicError }}</span>
           </div>
+        </div>
 
-          <template v-else>
+        <template v-else>
+          <!-- 待安装清单：离线包可一次拖入多个 -->
+          <div
+            v-for="(pkg, index) in previewPackages"
+            :key="`${pkg.id}-${index}`"
+            class="plugin-preview__item"
+          >
             <div class="plugin-preview__head">
               <div class="plugin-card__icon">
-                <Icon :name="entry.info.icon || 'puzzle'" />
+                <Icon :name="pkg.icon || 'puzzle'" />
               </div>
               <div class="plugin-preview__title">
                 <div class="plugin-preview__name">
-                  {{ entry.info.name }}
+                  {{ pkg.name }}
                   <span class="plugin-card__version">
-                    {{ entry.info.upgrade
-                      ? `v${entry.info.currentVersion} → v${entry.info.version}`
-                      : `v${entry.info.version}` }}
+                    {{ pkg.upgrade
+                      ? `v${pkg.currentVersion} → v${pkg.version}`
+                      : `v${pkg.version}` }}
                   </span>
                 </div>
-                <div class="plugin-preview__publisher">{{ entry.info.publisher }}</div>
+                <div class="plugin-preview__publisher">{{ pkg.publisher }}</div>
               </div>
-              <Tag :tone="entry.info.official ? 'brand' : 'warning'" effect="plain" size="sm">
-                {{ entry.info.official ? '官方' : '第三方' }}
+              <Tag :tone="pkg.official ? 'brand' : 'warning'" effect="plain" size="sm">
+                {{ pkg.official ? '官方' : '第三方' }}
               </Tag>
-              <Tag :tone="entry.info.signed ? 'success' : 'warning'" effect="plain" size="sm">
-                {{ entry.info.signed ? '已签名' : '未签名' }}
+              <!-- 签名与否是来源验签的结论，依赖计划出来之前不下判断 -->
+              <Tag
+                v-if="sourceVerifiedOf(pkg.id) !== null"
+                :tone="sourceVerifiedOf(pkg.id) ? 'success' : 'warning'"
+                effect="plain"
+                size="sm"
+              >
+                {{ sourceVerifiedOf(pkg.id) ? '已签名' : '未签名' }}
               </Tag>
             </div>
 
-            <p v-if="entry.info.description" class="plugin-preview__desc">
-              {{ entry.info.description }}
-            </p>
+            <p v-if="pkg.description" class="plugin-preview__desc">{{ pkg.description }}</p>
 
-            <p v-if="entry.fileName" class="plugin-preview__from">
-              来源文件：{{ entry.fileName }}
-            </p>
+            <p v-if="pkg.sourceRef" class="plugin-preview__from">来源：{{ pkg.sourceRef }}</p>
 
-            <!-- 依赖：解析中先转圈，完成后展示计划或缺失项 -->
-            <section class="plugin-preview__section">
-              <h4>依赖</h4>
-
-              <div v-if="!entry.preview && !entry.depsError" class="plugin-preview__scan">
-                <span class="plugin-preview__spinner" aria-hidden="true" />
-                <span>正在解析依赖…</span>
-              </div>
-
-              <p v-else-if="entry.depsError" class="plugin-preview__note is-warning">
-                {{ entry.depsError }}
-              </p>
-
-              <template v-else-if="entry.preview">
-                <ul
-                  v-if="entry.preview.missingDependencies.length"
-                  class="plugin-preview__deps is-missing"
-                >
-                  <li v-for="dep in entry.preview.missingDependencies" :key="dep.id">
-                    <Icon name="alert-triangle" />
-                    <span class="plugin-preview__dep-name">{{ dep.id }}</span>
-                    <span class="plugin-preview__dep-version">{{ dep.reason }}</span>
-                  </li>
-                </ul>
-
-                <ul v-if="dependenciesOf(entry.preview).length" class="plugin-preview__deps">
-                  <li v-for="dep in dependenciesOf(entry.preview)" :key="dep.id">
-                    <Icon name="package" />
-                    <span class="plugin-preview__dep-name">{{ dep.id }}</span>
-                    <Tag size="sm" effect="plain" :tone="dependencyTag(dep).tone">
-                      {{ dependencyTag(dep).text }}
-                    </Tag>
-                    <span class="plugin-preview__dep-version">v{{ dep.version }}</span>
-                  </li>
-                </ul>
-
-                <!-- 「无依赖」以清单声明的依赖为准，而不是求解计划：
-                     依赖都装齐时计划里同样没有待装项，但插件依然是有依赖的 -->
-                <p v-if="!entry.preview.dependencies.length" class="plugin-preview__note">
-                  无依赖，可独立运行。
-                </p>
-                <p v-else-if="entry.preview.missingDependencies.length" class="plugin-preview__note">
-                  仍可继续安装，但在依赖补齐之前该插件无法启用。
-                </p>
-              </template>
-            </section>
-
-            <section v-if="entry.info.permissions.length" class="plugin-preview__section">
+            <section v-if="pkg.permissions.length" class="plugin-preview__section">
               <h4>申请权限</h4>
               <ul class="plugin-detail__list">
-                <li v-for="permission in entry.info.permissions" :key="permission">
-                  {{ permission }}
-                </li>
+                <li v-for="permission in pkg.permissions" :key="permission">{{ permission }}</li>
               </ul>
             </section>
+          </div>
 
-            <section v-if="entry.info.warnings.length" class="plugin-preview__section">
-              <h4>风险提示</h4>
-              <ul class="plugin-preview__list is-warning">
-                <li v-for="warning in entry.info.warnings" :key="warning">
-                  <Icon name="alert-triangle" />
-                  <span>{{ warning }}</span>
+          <!-- 清单还没读出来（本地读取，通常一闪而过） -->
+          <div v-if="!previewPackages.length" class="plugin-preview__scan">
+            <span class="plugin-preview__spinner" aria-hidden="true" />
+            <span>正在读取 {{ pendingLabels.join('、') || '插件包' }}…</span>
+          </div>
+
+          <!--
+            依赖：后端按整批一次性求解，这里只展示用户没直接选的那部分。
+            求解不出来就没有 planId，也就没法安装，所以失败要明说而不是放过。
+          -->
+          <section v-if="basicPreview" class="plugin-preview__section">
+            <h4>依赖</h4>
+
+            <div v-if="resolvingPlan" class="plugin-preview__scan">
+              <span class="plugin-preview__spinner" aria-hidden="true" />
+              <span>正在解析依赖…</span>
+            </div>
+
+            <p v-else-if="planError" class="plugin-preview__note is-warning">
+              {{ planError }}
+            </p>
+
+            <template v-else>
+              <ul v-if="previewDependencies.length" class="plugin-preview__deps">
+                <li v-for="dep in previewDependencies" :key="dep.id">
+                  <Icon name="package" />
+                  <span class="plugin-preview__dep-name">{{ dep.id }}</span>
+                  <Tag size="sm" effect="plain" :tone="dependencyTag(dep).tone">
+                    {{ dependencyTag(dep).text }}
+                  </Tag>
+                  <span class="plugin-preview__dep-version">v{{ dep.version }}</span>
                 </li>
               </ul>
-            </section>
-          </template>
-        </div>
+              <p v-else class="plugin-preview__note">本次无需额外安装其它插件。</p>
+            </template>
+          </section>
+        </template>
 
-        <!-- 汇总：新增权限 + 两道确认关卡 -->
+        <!-- 汇总：风险提示 + 新增权限 + 两道确认关卡 -->
+        <section v-if="previewWarnings.length" class="plugin-preview__section">
+          <h4>风险提示</h4>
+          <ul class="plugin-preview__list is-warning">
+            <li v-for="warning in previewWarnings" :key="warning">
+              <Icon name="alert-triangle" />
+              <span>{{ warning }}</span>
+            </li>
+          </ul>
+        </section>
+
         <section v-if="mergedAddedPermissions.length" class="plugin-preview__section">
           <h4>本次新增权限</h4>
           <ul class="plugin-detail__list">
@@ -1421,6 +1437,10 @@ async function saveRegistry(): Promise<void> {
           <span>我了解其中包含不在官方信任列表中的插件，并确认信任其发布者</span>
         </label>
 
+        <p v-if="needsTrustConfirm && trustReason" class="plugin-preview__note is-warning">
+          {{ trustReason }}
+        </p>
+
         <label v-if="mergedAddedPermissions.length" class="plugin-preview__check">
           <input v-model="permissionsAccepted" type="checkbox">
           <span>我接受本次新增的权限</span>
@@ -1429,6 +1449,10 @@ async function saveRegistry(): Promise<void> {
 
       <template #footer>
         <div class="plugin-preview__footer">
+          <!-- 按钮为什么点不动要说清楚，否则看着像卡住了 -->
+          <span v-if="!hasPlan" class="plugin-preview__footer-hint">
+            {{ basicError ? '读取插件包失败' : planError ? '依赖解析失败' : '正在生成安装计划…' }}
+          </span>
           <Button variant="ghost" @click="previewVisible = false">取消</Button>
           <Button :disabled="!canConfirm" :loading="installing" @click="confirmInstall">
             {{ needsTrustConfirm ? '信任并安装' : '安装' }}
@@ -1981,6 +2005,13 @@ async function saveRegistry(): Promise<void> {
   line-height: 1.5;
 }
 
+.plugin-card__source-name {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .plugin-card__meta {
   display: flex;
   align-items: center;
@@ -2098,17 +2129,8 @@ async function saveRegistry(): Promise<void> {
   min-width: 0;
 }
 
-.plugin-market__source-text {
-  max-width: 320px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-muted);
-  font-size: var(--app-font-size-xs);
-}
-
-.plugin-market__source-input {
-  width: 320px;
+.plugin-market__source-select {
+  width: 260px;
 }
 
 .plugin-market__error {
@@ -2207,12 +2229,6 @@ async function saveRegistry(): Promise<void> {
   color: var(--danger-color);
 }
 
-/* 缺失的依赖：标红提示，不阻断安装 */
-.plugin-preview__deps.is-missing li {
-  border-color: color-mix(in srgb, var(--danger-color) 40%, transparent);
-  color: var(--danger-color);
-}
-
 /* 校验中的条目 */
 .plugin-preview__scan {
   display: flex;
@@ -2306,6 +2322,14 @@ async function saveRegistry(): Promise<void> {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* 按钮处于禁用状态的原因，靠左显示、不与按钮混在一起 */
+.plugin-preview__footer-hint {
+  margin-right: auto;
+  align-self: center;
+  color: var(--text-muted);
+  font-size: var(--app-font-size-xs);
 }
 
 /* ------------------------------------------------ 手动安装 */

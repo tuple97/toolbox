@@ -4,7 +4,7 @@ import { VueDraggable } from 'vue-draggable-plus'
 import Icon from '@/components/ui/Icon.vue'
 import { useTabStore } from '@/stores/tabStore'
 import { useConfigStore } from '@/stores/configStore'
-import { PINNED_TOP_TOOLS, TOOL_GROUPS, TOP_LEVEL_TOOLS, toolOf } from '@/utils/tools'
+import { TOOL_GROUPS, TOP_LEVEL_TOOLS, toolOf } from '@/utils/tools'
 import { parseSidebarView, serializeSidebarView } from '@/utils/sidebarView'
 import type { ToolType } from '@/types'
 
@@ -72,18 +72,10 @@ function isGroupVisible(group: { label: string, tools: ToolType[] }): boolean {
   return visibleGroupTools(group).length > 0
 }
 
-/** 顶级工具分置顶 / 贴底两段渲染 */
-const pinnedTopTools = computed(() =>
-  TOP_LEVEL_TOOLS.filter(type => PINNED_TOP_TOOLS.includes(type)),
-)
-const bottomTopTools = computed(() =>
-  TOP_LEVEL_TOOLS.filter(type => !PINNED_TOP_TOOLS.includes(type)),
-)
-const visiblePinnedTopTools = computed(() =>
-  pinnedTopTools.value.filter(type => !sidebarConfig.value.hidden.includes(type)),
-)
-const visibleBottomTopTools = computed(() =>
-  bottomTopTools.value.filter(type => !sidebarConfig.value.hidden.includes(type)),
+/** 顶级工具（不分组），排在分组之后贴底渲染 */
+const topTools = computed(() => TOP_LEVEL_TOOLS)
+const visibleTopTools = computed(() =>
+  topTools.value.filter(type => !sidebarConfig.value.hidden.includes(type)),
 )
 
 // ------------------------------------------------------------ 编辑态
@@ -92,6 +84,31 @@ const editing = ref(false)
 /** 编辑草稿：点「完成」才落盘 */
 const draftOrder = ref<Record<string, ToolType[]>>({})
 const draftHidden = ref<ToolType[]>([])
+
+/**
+ * 真正会渲染出来的分组（按显示顺序）。
+ *
+ * 分隔线只能画在「有内容的两段之间」：一个插件都没有、或者分组被全部隐藏时，
+ * 上方什么都没有，这时再画线就会留下悬空的横杠。
+ */
+const visibleGroupLabels = computed(() =>
+  TOOL_GROUPS
+    .filter(group => editing.value || isGroupVisible(group))
+    .map(group => group.label))
+
+/** 上方是否真的有分组 */
+const hasVisibleGroups = computed(() => visibleGroupLabels.value.length > 0)
+
+/**
+ * 该分组上方是否还有别的分组（收起态下用它决定要不要画分隔线）。
+ *
+ * 不能用 CSS 的相邻兄弟选择器：被隐藏的分组仍在 DOM 里，
+ * 「前一个隐藏、自己可见」时照样会命中，结果就是线画在空处。
+ */
+function isDividedGroup(label: string): boolean {
+  const labels = visibleGroupLabels.value
+  return labels.length > 0 && labels[0] !== label
+}
 
 function enterEdit() {
   const config = parseSidebarConfig(configStore.values.sidebar_config)
@@ -204,50 +221,12 @@ function handleNewInstance(type: ToolType) {
 <template>
   <aside class="app-sidebar" :class="{ 'app-sidebar--collapsed': collapsed }">
     <nav class="app-sidebar__nav">
-      <ul
-        v-show="editing || visiblePinnedTopTools.length > 0"
-        class="app-sidebar__items app-sidebar__items--pinned"
-      >
-        <template v-if="editing">
-          <li
-            v-for="type in pinnedTopTools"
-            :key="type"
-            class="app-sidebar__item is-editing"
-            :class="{ 'is-hidden': draftHidden.includes(type) }"
-          >
-            <span class="app-sidebar__handle is-static" aria-hidden="true" />
-            <Icon class="app-sidebar__icon" :name="iconOf(type)" />
-            <span class="app-sidebar__label">{{ toolOf(type)?.label }}</span>
-            <button
-              class="app-sidebar__eye"
-              type="button"
-              :title="draftHidden.includes(type) ? '显示菜单' : '隐藏菜单'"
-              @click.stop="toggleDraftHidden(type)"
-            >
-              <Icon :name="draftHidden.includes(type) ? 'eye-off' : 'eye'" />
-            </button>
-          </li>
-        </template>
-        <template v-else>
-          <li
-            v-for="type in visiblePinnedTopTools"
-            :key="type"
-            class="app-sidebar__item"
-            :class="{ 'is-active': isActive(type) }"
-            :title="titleOf(type)"
-            @click="handleSelect(type)"
-          >
-            <Icon class="app-sidebar__icon" :name="iconOf(type)" />
-            <span class="app-sidebar__label">{{ toolOf(type)?.label }}</span>
-          </li>
-        </template>
-      </ul>
-
       <section
         v-for="group in TOOL_GROUPS"
         :key="group.label"
         v-show="editing || isGroupVisible(group)"
         class="app-sidebar__group"
+        :class="{ 'is-divided': isDividedGroup(group.label) }"
       >
         <button
           class="app-sidebar__group-head"
@@ -294,9 +273,10 @@ function handleNewInstance(type: ToolType) {
           </li>
         </VueDraggable>
 
+        <!-- 收起态没有分组标题，谈不上展开/收起，一律显示图标 -->
         <ul
           v-else
-          v-show="expandedGroups.includes(group.label)"
+          v-show="collapsed || expandedGroups.includes(group.label)"
           class="app-sidebar__items"
         >
           <li
@@ -324,14 +304,15 @@ function handleNewInstance(type: ToolType) {
         </ul>
       </section>
 
-      <!-- 贴底的顶级菜单项 -->
+      <!-- 贴底的顶级菜单项（不分组）；上方没有分组时不画分隔线 -->
       <ul
-        v-show="editing || visibleBottomTopTools.length > 0"
+        v-show="editing || visibleTopTools.length > 0"
         class="app-sidebar__items app-sidebar__items--top"
+        :class="{ 'is-divided': hasVisibleGroups }"
       >
         <template v-if="editing">
           <li
-            v-for="type in bottomTopTools"
+            v-for="type in topTools"
             :key="type"
             class="app-sidebar__item is-editing"
             :class="{ 'is-hidden': draftHidden.includes(type) }"
@@ -351,7 +332,7 @@ function handleNewInstance(type: ToolType) {
         </template>
         <template v-else>
           <li
-            v-for="type in visibleBottomTopTools"
+            v-for="type in visibleTopTools"
             :key="type"
             class="app-sidebar__item"
             :class="{ 'is-active': isActive(type) }"
@@ -430,20 +411,16 @@ function handleNewInstance(type: ToolType) {
   padding: 0;
 }
 
-.app-sidebar--collapsed .app-sidebar__group + .app-sidebar__group {
+/* 收起态没有分组标题，用细线把相邻分组隔开（第一段上方没东西，不画） */
+.app-sidebar--collapsed .app-sidebar__group.is-divided {
   margin-top: 6px;
   padding-top: 6px;
   border-top: 1px solid var(--border-color);
 }
 
-.app-sidebar--collapsed .app-sidebar__items--top {
+.app-sidebar--collapsed .app-sidebar__items--top.is-divided {
   margin-top: 6px;
   padding-top: 6px;
-}
-
-.app-sidebar--collapsed .app-sidebar__items--pinned {
-  margin-bottom: 6px;
-  padding-bottom: 6px;
 }
 
 .app-sidebar--collapsed .app-sidebar__footer {
@@ -500,17 +477,21 @@ function handleNewInstance(type: ToolType) {
   list-style: none;
 }
 
+/*
+ * 顶级菜单段。
+ *
+ * 分隔线与间距只在「上方确实有分组」时才加（is-divided）：
+ * 没有插件分组时它是最上面唯一的一段，再加就会留下一条悬空的横杠。
+ */
 .app-sidebar__items--top {
+  margin: 0;
+  padding: 0;
+}
+
+.app-sidebar__items--top.is-divided {
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--border-color);
-}
-
-/* 置顶段 */
-.app-sidebar__items--pinned {
-  margin-bottom: 8px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border-color);
 }
 
 /* 菜单项 */

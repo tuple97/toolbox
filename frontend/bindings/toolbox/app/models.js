@@ -6,6 +6,10 @@
 // @ts-ignore: Unused imports
 import { Create as $Create } from "@wailsio/runtime";
 
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as plugin$0 from "./internal/plugin/models.js";
+
 /**
  * AppInfo 应用与运行环境信息
  */
@@ -108,3 +112,56 @@ export class AppStartupState {
         return new AppStartupState(/** @type {Partial<AppStartupState>} */($$parsedSource));
     }
 }
+
+/**
+ * PluginSourceSnapshot 单个插件源的快照（设置里按源预览用）。
+ */
+export class PluginSourceSnapshot {
+    /**
+     * Creates a new PluginSourceSnapshot instance.
+     * @param {Partial<PluginSourceSnapshot>} [$$source = {}] - The source object to create the PluginSourceSnapshot.
+     */
+    constructor($$source = {}) {
+        if (!("source" in $$source)) {
+            /**
+             * Source 该来源的状态（是否启用、是否验签通过、读取是否失败）
+             * @member
+             * @type {plugin$0.MarketplaceSource}
+             */
+            this["source"] = (new plugin$0.MarketplaceSource());
+        }
+        if (!("items" in $$source)) {
+            /**
+             * Items 该来源提供的插件条目（同 id 取该来源的最高版本）
+             * @member
+             * @type {plugin$0.MarketplaceItem[]}
+             */
+            this["items"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new PluginSourceSnapshot instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {PluginSourceSnapshot}
+     */
+    static createFrom($$source = {}) {
+        const $$createField0_0 = $$createType0;
+        const $$createField1_0 = $$createType2;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("source" in $$parsedSource) {
+            $$parsedSource["source"] = $$createField0_0($$parsedSource["source"]);
+        }
+        if ("items" in $$parsedSource) {
+            $$parsedSource["items"] = $$createField1_0($$parsedSource["items"]);
+        }
+        return new PluginSourceSnapshot(/** @type {Partial<PluginSourceSnapshot>} */($$parsedSource));
+    }
+}
+
+// Private type creation functions
+const $$createType0 = plugin$0.MarketplaceSource.createFrom;
+const $$createType1 = plugin$0.MarketplaceItem.createFrom;
+const $$createType2 = $Create.Array($$createType1);

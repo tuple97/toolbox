@@ -25,8 +25,8 @@ export interface ContextMenuAction {
 /**
  * 工具类型标识。
  *
- * 内置工具（home / connections / sql-template / db-query / command-executor /
- * dictionary / settings / plugins / placeholder）是固定枚举；
+ * 内置工具（plugins / settings / connections / sql-template / db-query /
+ * command-executor / dictionary / placeholder）是固定枚举；
  * 插件贡献的工具是运行时才知道的任意标识，因此这里放宽为 string。
  * 后端的 database.Tab.ToolType 同样是 string。
  */
@@ -37,7 +37,6 @@ export type BuiltinToolType =
   | 'placeholder'
   | 'db-query'
   | 'command-executor'
-  | 'home'
   | 'connections'
   | 'sql-template'
   | 'dictionary'
@@ -672,30 +671,89 @@ export interface InstalledPlugin {
   previousVersion: string
 }
 
-/** 插件安装来源 */
-export type PluginInstallSource = 'registry' | 'url' | 'file' | 'local'
+/**
+ * 插件安装来源。
+ *
+ * archive 是前端已把包读成字节流（拖拽 / 文件选择）的情况：
+ * 路径与网络地址都由后端读取，只有它必须把内容传给后端。
+ */
+export type PluginInstallSource = 'registry' | 'url' | 'file' | 'local' | 'archive'
 
-/** 安装请求 */
-export interface PluginInstallRequest {
+/**
+ * 一次安装中的一个包输入。
+ *
+ * 与后端 PackageInputWire 对应：市场来源给 sourceUrl + id (+ version)，
+ * 本地来源给 ref（路径），离线包给 fileName + contentBase64。
+ * 信任与权限不在这里 —— 它们属于「确认安装」那一步，见 PluginInstallPlan。
+ */
+export interface PluginPackageInput {
   source: PluginInstallSource
+  /** registry 来源时点选的插件源地址；留空表示跨来源自动挑选 */
+  sourceUrl?: string
+  /** registry 来源时的插件标识 */
   id?: string
+  /** registry 来源时可选，缺省取满足约束的最高版本 */
   version?: string
+  /** url / file / local 来源的地址或路径；archive 来源的展示名 */
   ref?: string
-  trust: boolean
-  acceptPermissions: boolean
+  /** archive 来源的包文件名（仅用于展示） */
+  fileName?: string
+  /** archive 来源的包内容（base64） */
+  contentBase64?: string
 }
 
-/** 依赖闭包中的单个动作 */
-export interface PluginInstallPlanItem {
+/** 一个插件源（索引地址） */
+export interface PluginRegistrySource {
+  url: string
+  name: string
+  enabled: boolean
+}
+
+/** 单个插件源在某次读取中的状态 */
+export interface PluginMarketplaceSource {
+  url: string
+  name: string
+  /** 是否参与合并展示 */
+  enabled: boolean
+  /** 是否为宿主内置的官方源（只有它被强制要求验签） */
+  official: boolean
+  /** ready 读到索引 / error 读取失败 / idle 未读取 */
+  state: string
+  /** 索引签名是否校验通过 */
+  verified: boolean
+  updatedAt: string
+  /** 该来源提供的插件条目数 */
+  count: number
+  error: string
+}
+
+/** 依赖闭包中的单个动作；计划一次求解、安装时不再重新求解 */
+export interface PluginPlanItem {
   id: string
   version: string
-  action: 'install' | 'upgrade' | 'keep' | string
-  /** 依赖由安装时扫描同级目录得到（用户并未显式选中） */
-  scanned: boolean
+  action: 'install' | 'upgrade' | 'reinstall' | 'keep' | string
+  /** 包的来源类型：registry / url / file / local / batch */
+  source: string
+  /** 来源引用（下载地址 / 本地路径 / 包文件名） */
+  sourceRef: string
+  checksum: string
+  /** 是否可信的官方条目（= 索引声明 official 且该来源验签通过） */
+  official: boolean
+  /** 该条目所在来源的索引是否验签通过 */
+  sourceVerified: boolean
+  /** 是否用户显式选择（false 表示由依赖带出来的） */
+  root: boolean
+  /** 是否需要用户确认信任 */
+  needTrust: boolean
+  trustReason: string
+  /** 本次相对已安装版本新增的权限 */
+  addedPermissions: string[]
+  /** 本地已有可复用的包内容 */
+  cached: boolean
 }
 
-/** 安装预览（权限确认弹窗的数据源） */
-export interface PluginInstallPreview {
+/** 用户显式选择的一个待安装包（确认弹窗里的一张卡片） */
+export interface PluginPackagePreview {
   id: string
   name: string
   version: string
@@ -708,21 +766,43 @@ export interface PluginInstallPreview {
   source: string
   sourceRef: string
   official: boolean
-  trusted: boolean
-  needTrust: boolean
   checksum: string
-  signed: boolean
 
+  /** 是否为升级既有插件 */
   upgrade: boolean
+  /** 当前已安装版本（升级时非空） */
   currentVersion: string
 
   permissions: string[]
   addedPermissions: string[]
   dependencies: PluginDependencyRef[]
-  plan: PluginInstallPlanItem[]
-  /** 无法解析的依赖：仍可安装，但补齐前插件无法启用 */
-  missingDependencies: PluginMissingDependency[]
+}
+
+/**
+ * 安装预览（权限确认弹窗的数据源）。
+ *
+ * 一份预览对应一次安装的完整依赖闭包：选中的包在 packages 里，
+ * 连它们带出来的依赖一起在 plan 里。planId 是安装的唯一凭据。
+ */
+export interface PluginInstallPreview {
+  /** 安装计划标识；只读清单（不求解依赖）时为空 */
+  planId: string
+  /** 计划过期时间（RFC3339） */
+  expiresAt: string
+  /** 用户显式选择的包 */
+  packages: PluginPackagePreview[]
+  /** 完整依赖闭包（含已满足的 keep 项，按依赖在前排序） */
+  plan: PluginPlanItem[]
+  /** 风险提示 */
   warnings: string[]
+  /** 是否存在需要用户确认信任的来源 */
+  needTrust: boolean
+  /** 为什么需要确认信任 */
+  trustReason: string
+  /** 需要用户确认的新增权限（已去重） */
+  addedPermissions: string[]
+  /** 需要联网下载的安装包数量 */
+  pendingDownloads: number
 }
 
 /** 插件市场条目 */
@@ -734,7 +814,13 @@ export interface PluginMarketplaceItem {
   description: string
   icon: string
   homepage: string
+  /** 是否可信的官方条目（= 索引声明 official 且来源验签通过） */
   official: boolean
+  /** 该条目来自哪个插件源 */
+  sourceUrl: string
+  sourceName: string
+  /** 该来源的索引是否验签通过 */
+  sourceVerified: boolean
 
   installed: boolean
   installedVersion: string
@@ -744,13 +830,22 @@ export interface PluginMarketplaceItem {
   dependencies: string[]
 }
 
-/** 插件市场快照 */
+/** 插件市场快照（合并全部已启用来源） */
 export interface PluginMarketplaceSnapshot {
+  /** ready 至少一个来源可用 / error 全部失败 / idle 没有已启用来源 */
   state: string
-  source: string
-  updatedAt: string
-  verified: boolean
+  /** 各来源状态（含被禁用的，便于设置里管理） */
+  sources: PluginMarketplaceSource[]
+  /** 宿主是否配置了索引签名公钥；关闭时任何来源都无法验签 */
+  signatureEnabled: boolean
   error: string
+  /** 合并后的条目列表：同名插件在不同来源各占一条 */
+  items: PluginMarketplaceItem[]
+}
+
+/** 单个插件源的快照（设置里按源预览） */
+export interface PluginSourceSnapshot {
+  source: PluginMarketplaceSource
   items: PluginMarketplaceItem[]
 }
 
@@ -761,6 +856,10 @@ export interface PluginUpdateInfo {
   currentVersion: string
   latestVersion: string
   official: boolean
+  /** 提供该最新版本的插件源 */
+  sourceUrl: string
+  sourceName: string
+  sourceVerified: boolean
   addedPermissions: string[]
   canAutoUpgrade: boolean
 }

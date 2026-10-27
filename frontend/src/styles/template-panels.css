@@ -167,12 +167,12 @@
 /*
  * 代码编辑器的外壳。
  *
- * 不铺底色：编辑器（CM6）自身背景就是透明的，页面上另一个代码区（SQL 模板编辑器）
- * 所在的卡片也没有底色 —— 这里再铺一层浮层色，同一页里两个代码区颜色就对不上了。
- * 编辑范围靠描边表达即可。
+ * 不铺底色、也**不描边**：编辑器（CM6）自身背景透明，所在的分组 / 卡片
+ * （`.tpl-master`）已经提供了一圈边框，这里再套一层就成了双层框 ——
+ * 视觉上一个代码区被框了两次，和 SQL 模板编辑器（无框）也对不齐。
+ * 编辑范围靠标题行的下分隔线与代码高亮表达。
  */
 .tpl-panel__editor {
-  border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   overflow: hidden;
 }
@@ -183,6 +183,9 @@
  *
  * 排布与 SQL 模板编辑器一致：这些选择器只影响编辑器里的补全候选，
  * 贴着编辑器放才不用改一次候选就回上面找一趟。
+ *
+ * 字号用 sm（= 基准 - 1px）而不是 xs：这一行里的「查询 SQL」是这块配置的**名称**，
+ * 旁边同级的 Field 标签、选择器控件都是 sm，只有它小一号就会显得整个标题被压扁。
  */
 .tpl-panel__editor-head {
   display: flex;
@@ -192,11 +195,12 @@
   padding: 6px 10px;
   border-bottom: 1px solid var(--border-color);
   color: var(--text-muted);
-  font-size: var(--app-font-size-xs);
+  font-size: var(--app-font-size-sm);
 }
 
 .tpl-panel__editor-title {
   flex: 0 0 auto;
+  font-size: var(--app-font-size-sm);
 }
 
 .tpl-panel__editor-actions {

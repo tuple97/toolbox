@@ -93,6 +93,9 @@ import { resolveCreateTableSql } from '@/utils/sql/ddl/createTableSqlSource'
 import type { CreateTableSqlResult } from '@/utils/sql/ddl/createTableSqlSource'
 import { createTableModelOf, generateCreateTableSql } from '@/utils/sql/ddl/sqlCreateTable'
 import { dialectOf, fetchPrimaryKeys } from '@/utils/sql/rowSql'
+import { formatSql, minifySql as minifySqlText } from '@/utils/sql/sqlFormat'
+import { statementAtCursor } from '@/utils/sql/sqlStatementRanges'
+import Icon from '@/components/ui/Icon.vue'
 import { fetchTableIndexes } from '@/utils/sql/tableIndexes'
 import { parameterInfoAt } from '@/utils/sql/sqlParameterInfo'
 import { useMetadataStore } from '@/stores/metadataStore'
@@ -139,6 +142,14 @@ const props = withDefaults(defineProps<{
   showStatementFrames?: boolean
   /** 是否显示行号左侧的「执行这条语句」按钮（仅 sql 语言） */
   showRunButtons?: boolean
+  /**
+   * 是否显示右上角的「格式化」按钮（仅 sql 语言）。
+   *
+   * 命令执行窗口自带一整条工具条，模板配置里的编辑器没有，于是同一套编辑器
+   * 「有的能格式化、有的不能」。这里把能力做进编辑器本身，需要的场景直接打开，
+   * 不必各自再拼一个工具条。
+   */
+  showFormatButton?: boolean
   /** 页面注入的动态补全上下文（覆盖实例级登记值，每次查询重新求值） */
   completionContext?: () => Partial<CompletionRuntime> | undefined
   /** 定向扩展开关（关掉函数候选、只留变量等轻量场景） */
@@ -153,6 +164,7 @@ const props = withDefaults(defineProps<{
   completionMode: '',
   showStatementFrames: false,
   showRunButtons: false,
+  showFormatButton: false,
 })
 
 const configStore = useConfigStore()
@@ -1002,6 +1014,9 @@ function baseExtensions(): Extension[] {
       ...historyKeymap,
       // Ctrl+P：函数参数提示
       { key: 'Ctrl-p', mac: 'Mod-p', run: showParameterInfo },
+      // Alt+Shift+F：格式化当前语句 / 选中。仅 SQL 生效；脚本编辑器（JS）上
+      // 必须放行按键，否则会拿 JS 去找 SQL 语句并弹出误导性的提示。
+      { key: 'Alt-Shift-f', run: () => props.language === 'sql' && formatSqlAtCursor() },
       // Esc：关参数提示
       { key: 'Escape', run: closeParameterTip },
       { key: 'Space', run: toggleCheckedColumn },
@@ -1183,10 +1198,75 @@ function setErrors(positions: ErrorPosition[], options: { reveal?: boolean } = {
   }
 }
 
+// ---------------------------------------------------------------- 格式化
+
+/** 一次格式化作用到的文本范围 */
+interface FormatRange {
+  from: number
+  to: number
+  text: string
+}
+
+/**
+ * 当前该格式化的范围：有选中就是选中，否则是光标所在的那条 SQL。
+ *
+ * 与命令执行窗口同一套口径（statementAtCursor）—— 同一个「格式化」动作，
+ * 在查询页和模板配置里必须作用到同一段文本，否则用户按同样的键会得到不同结果。
+ */
+function formatRangeOf(view: EditorView): FormatRange | null {
+  const selection = view.state.selection.main
+  if (!selection.empty) {
+    const text = view.state.sliceDoc(selection.from, selection.to)
+    return text.trim() ? { from: selection.from, to: selection.to, text } : null
+  }
+  const range = statementAtCursor(view.state.doc, selection.head, props.dbType ?? '')
+  return range ? { from: range.from, to: range.to, text: range.sql } : null
+}
+
+/**
+ * 格式化光标处（或选中的）SQL；@returns 是否真的改动了文本。
+ *
+ * 美化与压缩合成一个动作，方向按当前形态自动切换：范围已经写成多行就压缩，
+ * 否则展开。写 SQL 的自然节奏就是「先写一行 → 展开看清楚 → 再压回去」。
+ */
+function formatSqlAtCursor(): boolean {
+  const view = viewRef.value
+  if (!view) {
+    return false
+  }
+  const range = formatRangeOf(view)
+  if (!range) {
+    notify.warning('光标处未匹配到 SQL 命令')
+    return false
+  }
+
+  let next = ''
+  try {
+    next = range.text.includes('\n')
+      ? minifySqlText(range.text)
+      : formatSql(range.text, dialectOf(props.dbType ?? ''))
+  }
+  catch (e) {
+    notify.error(`格式化失败：${e instanceof Error ? e.message : String(e)}`)
+    return false
+  }
+  if (!next || next === range.text) {
+    return false
+  }
+
+  view.dispatch({
+    changes: { from: range.from, to: range.to, insert: next },
+    selection: { anchor: range.from + next.length },
+  })
+  view.focus()
+  return true
+}
+
 /** 供父组件调用：只暴露必要的编辑器能力 */
 defineExpose({
   insertTemplateText,
   setErrors,
+  formatSql: formatSqlAtCursor,
   renameSymbolAt,
   renameTargetAt,
   copyCreateTableAt,
@@ -1198,13 +1278,70 @@ defineExpose({
 </script>
 
 <template>
-  <div ref="host" class="code-editor" :style="{ height }" />
+  <!--
+    只有需要右上角格式化按钮时才多包一层定位容器：其余调用方（日志、脚本、
+    结果预览…）保持原来的单 div 结构，尺寸行为完全不变。
+  -->
+  <div v-if="showFormatButton" class="code-editor-frame" :style="{ height }">
+    <div ref="host" class="code-editor code-editor--fill" />
+    <button
+      type="button"
+      class="code-editor__format"
+      title="格式化（美化 / 压缩，Alt+Shift+F）"
+      @click="formatSqlAtCursor"
+    >
+      <Icon name="wand" />
+    </button>
+  </div>
+  <div v-else ref="host" class="code-editor" :style="{ height }" />
 </template>
 
 <style scoped>
 /* 容器只负责尺寸；编辑器配色在 utils/logLanguage.ts 的主题里 */
 .code-editor {
   overflow: hidden;
+}
+
+/*
+ * 只在使用右上角格式化按钮时多出来的定位容器。
+ *
+ * 用 flex 而不是绝对定位套编辑器：调用方常给 height="100%"，多一层就必须让
+ * 高度链继续传下去，否则编辑器会塌成 0 高。
+ */
+.code-editor-frame {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.code-editor--fill {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* 贴在编辑器右上角：不参与布局，因此不会改变任何召唤方的尺寸 */
+.code-editor__format {
+  position: absolute;
+  top: 4px;
+  right: 16px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  background: var(--panel-bg);
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+
+.code-editor__format:hover {
+  color: var(--brand-color);
+  opacity: 1;
 }
 
 .code-editor :deep(.cm-editor) {

@@ -10,23 +10,20 @@ import {
   PluginAssetBase,
   PluginCheckUpdates,
   PluginGetSetting,
-  PluginInstall,
-  PluginInstallArchive,
+  PluginInstallPlan,
   PluginInvoke,
   PluginList,
+  PluginListSources,
   PluginMarketplace,
-  PluginPreviewArchive,
-  PluginPreviewArchiveBasic,
-  PluginPreviewBasic,
-  PluginPreviewInstall,
+  PluginPreviewPackages,
   PluginReadAsset,
-  PluginRegistryURL,
   PluginReload,
   PluginRollback,
+  PluginSaveSources,
   PluginSetEnabled,
-  PluginSetRegistryURL,
   PluginSetSetting,
   PluginSetTrusted,
+  PluginSourceMarketplace,
   PluginUninstall,
   PluginUpgrade,
 } from './bindings'
@@ -34,13 +31,18 @@ import type {
   InstalledPlugin,
   PluginDependencyRef,
   PluginInstallPreview,
-  PluginInstallRequest,
   PluginMarketplaceItem,
   PluginMarketplaceSnapshot,
+  PluginMarketplaceSource,
   PluginMCPToolContribution,
   PluginMissingDependency,
+  PluginPackageInput,
+  PluginPackagePreview,
+  PluginPlanItem,
+  PluginRegistrySource,
   PluginSettingsPanel,
   PluginSidebarGroup,
+  PluginSourceSnapshot,
   PluginToolContribution,
   PluginUpdateInfo,
 } from '@/types'
@@ -53,6 +55,11 @@ function str(value: unknown): string {
 /** 把后端返回转成布尔 */
 function bool(value: unknown): boolean {
   return value === true
+}
+
+/** 把后端返回转成数字（无法解析时为 0） */
+function num(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
 
 /** 把后端返回转成字符串数组 */
@@ -197,9 +204,29 @@ function toInstalledPlugin(raw: unknown): InstalledPlugin {
   }
 }
 
-/** 规整安装预览 */
-function toInstallPreview(raw: unknown): PluginInstallPreview {
-  const item = (raw ?? {}) as Record<string, any>
+/** 规整安装计划里的一条动作 */
+function toPlanItem(raw: unknown): PluginPlanItem {
+  const item = (raw ?? {}) as Record<string, unknown>
+  return {
+    id: str(item.id),
+    version: str(item.version),
+    action: str(item.action),
+    source: str(item.source),
+    sourceRef: str(item.sourceRef),
+    checksum: str(item.checksum),
+    official: bool(item.official),
+    sourceVerified: bool(item.sourceVerified),
+    root: bool(item.root),
+    needTrust: bool(item.needTrust),
+    trustReason: str(item.trustReason),
+    addedPermissions: strList(item.addedPermissions),
+    cached: bool(item.cached),
+  }
+}
+
+/** 规整一个待安装包 */
+function toPackagePreview(raw: unknown): PluginPackagePreview {
+  const item = (raw ?? {}) as Record<string, unknown>
   return {
     id: str(item.id),
     name: str(item.name),
@@ -213,10 +240,7 @@ function toInstallPreview(raw: unknown): PluginInstallPreview {
     source: str(item.source),
     sourceRef: str(item.sourceRef),
     official: bool(item.official),
-    trusted: bool(item.trusted),
-    needTrust: bool(item.needTrust),
     checksum: str(item.checksum),
-    signed: bool(item.signed),
 
     upgrade: bool(item.upgrade),
     currentVersion: str(item.currentVersion),
@@ -224,18 +248,22 @@ function toInstallPreview(raw: unknown): PluginInstallPreview {
     permissions: strList(item.permissions),
     addedPermissions: strList(item.addedPermissions),
     dependencies: Array.isArray(item.dependencies) ? item.dependencies.map(toDependency) : [],
-    missingDependencies: Array.isArray(item.missingDependencies)
-      ? item.missingDependencies.map(toMissingDependency)
-      : [],
-    plan: Array.isArray(item.plan)
-      ? item.plan.map((p: Record<string, unknown>) => ({
-          id: str(p?.id),
-          version: str(p?.version),
-          action: str(p?.action),
-          scanned: bool(p?.scanned),
-        }))
-      : [],
+  }
+}
+
+/** 规整安装预览 */
+function toInstallPreview(raw: unknown): PluginInstallPreview {
+  const item = (raw ?? {}) as Record<string, any>
+  return {
+    planId: str(item.planId),
+    expiresAt: str(item.expiresAt),
+    packages: Array.isArray(item.packages) ? item.packages.map(toPackagePreview) : [],
+    plan: Array.isArray(item.plan) ? item.plan.map(toPlanItem) : [],
     warnings: strList(item.warnings),
+    needTrust: bool(item.needTrust),
+    trustReason: str(item.trustReason),
+    addedPermissions: strList(item.addedPermissions),
+    pendingDownloads: num(item.pendingDownloads),
   }
 }
 
@@ -251,6 +279,9 @@ function toMarketplaceItem(raw: unknown): PluginMarketplaceItem {
     icon: str(item.icon),
     homepage: str(item.homepage),
     official: bool(item.official),
+    sourceUrl: str(item.sourceUrl),
+    sourceName: str(item.sourceName),
+    sourceVerified: bool(item.sourceVerified),
     installed: bool(item.installed),
     installedVersion: str(item.installedVersion),
     enabled: bool(item.enabled),
@@ -266,46 +297,125 @@ export async function fetchPlugins(): Promise<InstalledPlugin[]> {
   return (list ?? []).map(toInstalledPlugin)
 }
 
-/** 读取插件市场快照 */
+/** 规整单个插件源的状态 */
+function toMarketplaceSource(raw: unknown): PluginMarketplaceSource {
+  const item = (raw ?? {}) as Record<string, any>
+  return {
+    url: str(item.url),
+    name: str(item.name),
+    enabled: bool(item.enabled),
+    official: bool(item.official),
+    state: str(item.state) || 'idle',
+    verified: bool(item.verified),
+    updatedAt: str(item.updatedAt),
+    count: num(item.count),
+    error: str(item.error),
+  }
+}
+
+/** 读取插件市场快照（合并全部已启用来源） */
 export async function fetchMarketplace(refresh = false): Promise<PluginMarketplaceSnapshot> {
   const raw = (await PluginMarketplace(refresh)) as Record<string, any> | null
   const item = raw ?? {}
   return {
     state: str(item.state) || 'ready',
-    source: str(item.source),
-    updatedAt: str(item.updatedAt),
-    verified: bool(item.verified),
+    sources: Array.isArray(item.sources) ? item.sources.map(toMarketplaceSource) : [],
+    signatureEnabled: bool(item.signatureEnabled),
     error: str(item.error),
     items: Array.isArray(item.items) ? item.items.map(toMarketplaceItem) : [],
   }
 }
 
+/** 读取插件源列表 */
+export async function fetchPluginSources(): Promise<PluginRegistrySource[]> {
+  const raw = (await PluginListSources()) as unknown
+  if (!Array.isArray(raw)) {
+    return []
+  }
+  return raw.map((entry) => {
+    const item = (entry ?? {}) as Record<string, any>
+    return {
+      url: str(item.url),
+      name: str(item.name),
+      enabled: bool(item.enabled),
+    }
+  })
+}
+
+/** 整体保存插件源列表 */
+export async function savePluginSources(sources: PluginRegistrySource[]): Promise<void> {
+  await PluginSaveSources(sources.map(source => ({
+    url: source.url,
+    name: source.name,
+    enabled: source.enabled,
+  })))
+}
+
 /**
- * 把前端请求转成后端绑定期望的形状。
+ * 读取「单个来源」的插件列表（不看启用状态）。
  *
- * 后端 InstallRequest 里的可选字段在 Wails 生成的类型中是必填的
- * （生成器不解析 omitempty），统一在这里补空串，
- * 免得每个调用点各自做类型断言。
+ * 后端在读取失败时仍会返回来源状态，界面据此展示失败原因并把 error 抛出。
  */
-function toBackendRequest(req: PluginInstallRequest) {
+export async function fetchSourceMarketplace(
+  url: string,
+  refresh = false,
+): Promise<PluginSourceSnapshot> {
+  const raw = (await PluginSourceMarketplace(url, refresh)) as Record<string, any> | null
+  const item = raw ?? {}
   return {
-    source: req.source,
-    id: req.id ?? '',
-    version: req.version ?? '',
-    ref: req.ref ?? '',
-    trust: req.trust,
-    acceptPermissions: req.acceptPermissions,
+    source: toMarketplaceSource(item.source),
+    items: Array.isArray(item.items) ? item.items.map(toMarketplaceItem) : [],
   }
 }
 
-/** 生成安装预览 */
-export async function previewInstall(req: PluginInstallRequest): Promise<PluginInstallPreview> {
-  return toInstallPreview(await PluginPreviewInstall(toBackendRequest(req)))
+/**
+ * 把前端输入转成后端绑定期望的形状。
+ *
+ * 后端 PackageInputWire 里的可选字段在 Wails 生成的类型中是必填的
+ * （生成器不解析 omitempty），统一在这里补空串，
+ * 免得每个调用点各自做类型断言。
+ */
+function toBackendInput(input: PluginPackageInput) {
+  return {
+    source: input.source,
+    sourceUrl: input.sourceUrl ?? '',
+    id: input.id ?? '',
+    version: input.version ?? '',
+    ref: input.ref ?? '',
+    fileName: input.fileName ?? '',
+    contentBase64: input.contentBase64 ?? '',
+  }
 }
 
-/** 执行安装 */
-export function installPlugin(req: PluginInstallRequest): Promise<void> {
-  return PluginInstall(toBackendRequest(req))
+/**
+ * 预览一批插件包的安装。
+ *
+ * resolveDependencies 为 false 时只读清单（本地读取，毫秒级），
+ * 用于先把卡片渲染出来；为 true 时求解完整依赖闭包并生成安装计划
+ * （可能访问插件源），返回的 planId 是提交安装的唯一凭据。
+ *
+ * 整批一次性求解，因此同一批里互相依赖的包能在同一次求解里处理。
+ */
+export async function previewPackages(
+  inputs: PluginPackageInput[],
+  options: { resolveDependencies?: boolean, offline?: boolean } = {},
+): Promise<PluginInstallPreview> {
+  const raw = await PluginPreviewPackages(
+    inputs.map(toBackendInput),
+    options.resolveDependencies ?? false,
+    options.offline ?? false,
+  )
+  return toInstallPreview(raw)
+}
+
+/**
+ * 按已确认的安装计划完成安装。
+ *
+ * trust 表示用户已确认信任这些来源，acceptPermissions 表示接受本次新增权限；
+ * 计划是一次性的：提交后（无论成败）该 planId 都作废，需要重新预览。
+ */
+export function installPlan(planId: string, trust: boolean, acceptPermissions: boolean): Promise<void> {
+  return PluginInstallPlan(planId, trust, acceptPermissions)
 }
 
 /**
@@ -327,11 +437,6 @@ export function readFileAsBase64(file: File): Promise<string> {
   })
 }
 
-/** 预览从离线包安装 */
-export async function previewPluginArchive(fileName: string, contentBase64: string): Promise<PluginInstallPreview> {
-  return toInstallPreview(await PluginPreviewArchive(fileName, contentBase64))
-}
-
 /**
  * 读取插件内的文本资源。
  *
@@ -340,34 +445,6 @@ export async function previewPluginArchive(fileName: string, contentBase64: stri
  */
 export function readPluginAsset(id: string, version: string, path: string): Promise<string> {
   return PluginReadAsset(id, version, path)
-}
-
-/**
- * 快速预览：只读取插件包基本信息，不求解依赖（不联网）。
- *
- * 界面先用它渲染插件卡片，再调 previewInstall 补齐依赖计划 ——
- * 依赖求解可能要走官方索引，不该让基本信息陪着一起等。
- */
-export async function previewPluginBasic(req: PluginInstallRequest): Promise<PluginInstallPreview> {
-  return toInstallPreview(await PluginPreviewBasic(toBackendRequest(req)))
-}
-
-/** 快速预览离线包：只读基本信息，不求解依赖 */
-export async function previewPluginArchiveBasic(
-  fileName: string,
-  contentBase64: string,
-): Promise<PluginInstallPreview> {
-  return toInstallPreview(await PluginPreviewArchiveBasic(fileName, contentBase64))
-}
-
-/** 从离线包安装 */
-export function installPluginArchive(
-  fileName: string,
-  contentBase64: string,
-  trust: boolean,
-  acceptPermissions: boolean,
-): Promise<void> {
-  return PluginInstallArchive(fileName, contentBase64, trust, acceptPermissions)
 }
 
 /**
@@ -380,9 +457,14 @@ export function uninstallPlugin(id: string, force = false): Promise<string[]> {
   return PluginUninstall(id, force)
 }
 
-/** 启用 / 停用插件 */
-export function setPluginEnabled(id: string, enabled: boolean): Promise<void> {
-  return PluginSetEnabled(id, enabled)
+/**
+ * 启用 / 停用插件。
+ *
+ * cascade 为 true 时，停用被其它插件依赖的插件会一并停用依赖方；
+ * 返回本次实际变更（含被级联停用）的插件 id。
+ */
+export function setPluginEnabled(id: string, enabled: boolean, cascade = false): Promise<string[]> {
+  return PluginSetEnabled(id, enabled, cascade)
 }
 
 /** 设置插件信任状态 */
@@ -399,6 +481,9 @@ export async function checkPluginUpdates(): Promise<PluginUpdateInfo[]> {
     currentVersion: str(raw?.currentVersion),
     latestVersion: str(raw?.latestVersion),
     official: bool(raw?.official),
+    sourceUrl: str(raw?.sourceUrl),
+    sourceName: str(raw?.sourceName),
+    sourceVerified: bool(raw?.sourceVerified),
     addedPermissions: strList(raw?.addedPermissions),
     canAutoUpgrade: bool(raw?.canAutoUpgrade),
   }))
@@ -429,15 +514,7 @@ export function setPluginSetting(pluginId: string, key: string, value: string): 
   return PluginSetSetting(pluginId, key, value)
 }
 
-/** 读取当前插件索引地址 */
-export function fetchRegistryUrl(): Promise<string> {
-  return PluginRegistryURL()
-}
 
-/** 更换插件索引地址 */
-export function saveRegistryUrl(url: string): Promise<void> {
-  return PluginSetRegistryURL(url)
-}
 
 /** 读取插件前端资源 URL 前缀 */
 export async function fetchAssetBase(): Promise<string> {

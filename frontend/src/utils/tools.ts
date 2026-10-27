@@ -42,18 +42,11 @@ export interface ToolDefinition {
 /**
  * 内置工具清单（不可变）。
  *
- * 工具箱的定位是「插件运行平台」，因此内置工具只保留平台自身的三件事：
- * 首页、插件管理、设置。业务功能（SQL 工作台、词典等）一律以插件形式提供，
+ * 工具箱的定位是「插件运行平台」，因此内置工具只保留平台自身的两件事：
+ * 插件管理、设置。业务功能（SQL 工作台、词典等）一律以插件形式提供，
  * 宿主通过 plugin-sdk 向插件开放共享内核（stores / api / sql 引擎 / 组件）。
  */
 export const BUILTIN_TOOLS: readonly ToolDefinition[] = [
-  {
-    type: 'home',
-    label: '首页',
-    icon: 'home',
-    multi: false,
-    description: '插件运行平台首页（单例标签）',
-  },
   {
     type: 'plugins',
     label: '插件管理',
@@ -89,10 +82,7 @@ export interface ToolGroup {
 export const BUILTIN_GROUPS: readonly ToolGroup[] = []
 
 /** 顶级（不分组）工具，顺序即渲染顺序 */
-export const TOP_LEVEL_TOOLS: ToolType[] = ['home', 'plugins', 'settings']
-
-/** 置顶渲染的顶级工具（首页） */
-export const PINNED_TOP_TOOLS: ToolType[] = ['home']
+export const TOP_LEVEL_TOOLS: ToolType[] = ['plugins', 'settings']
 
 /**
  * 合并后的工具表（内置 + 插件）。

@@ -2,6 +2,7 @@ import { createApp, watchEffect } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
 import { syncWindowBackground } from './api/window'
+import { openEditingContextMenu } from './utils/editingContextMenu'
 import { installTitleTooltip } from './utils/tooltip'
 import { useConfigStore } from './stores/configStore'
 
@@ -23,30 +24,22 @@ app.use(createPinia())
 document.documentElement.classList.add('dark')
 
 /**
- * 全局屏蔽浏览器默认右键菜单。
+ * 全局接管右键菜单。
  *
- * 只有「真正的输入场景」保留原生菜单（便于复制/粘贴），
- * 编辑器（CM6）内部的 contenteditable 不算输入场景，其右键菜单一并关闭。
- * 后续需要右键菜单的位置，由对应组件自行渲染自定义菜单。
+ * 一律 preventDefault：原生浏览器菜单在本应用里没有使用场景，输入框也不例外 ——
+ * 那些位置改为弹出应用自己的「复制 / 剪切 / 粘贴」（utils/editingContextMenu.ts），
+ * 菜单项的启用状态按选区与剪贴板实时判定。
+ *
+ * 例外：已经自带右键菜单的组件（标签页、插件卡片、日志、代码块……）会在冒泡阶段
+ * 先调用 preventDefault，这里看到 defaultPrevented 就不再叠一层默认菜单。
  */
 document.addEventListener('contextmenu', (event) => {
-  if (shouldKeepNativeMenu(event.target)) {
+  if (event.defaultPrevented) {
     return
   }
   event.preventDefault()
+  openEditingContextMenu(event)
 })
-
-/** 判断事件目标是否属于需要保留原生菜单的输入控件 */
-function shouldKeepNativeMenu(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) {
-    return false
-  }
-  // CM6 的编辑区是 contenteditable，必须显式排除，否则会命中下面的输入豁免
-  if (target.closest('.cm-editor')) {
-    return false
-  }
-  return Boolean(target.closest('input, textarea, [contenteditable="true"]'))
-}
 
 app.mount('#app')
 

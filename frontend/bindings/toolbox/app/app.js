@@ -389,6 +389,18 @@ export function PluginCheckUpdates() {
 }
 
 /**
+ * PluginClearData 彻底清除某个插件的全部配置数据。
+ * 
+ * 这是一个独立且明确的操作：卸载插件默认不会清理配置，
+ * 以免升级、回滚或误卸载导致用户数据丢失。
+ * @param {string} pluginID
+ * @returns {$CancellablePromise<void>}
+ */
+export function PluginClearData(pluginID) {
+    return $Call.ByID(2566095191, pluginID);
+}
+
+/**
  * PluginGetSetting 读取插件的某个配置项。
  * @param {string} pluginID
  * @param {string} key
@@ -399,29 +411,29 @@ export function PluginGetSetting(pluginID, key) {
 }
 
 /**
- * PluginInstall 安装或升级插件。
- * 
- * req.Trust 表示用户已确认信任来源；
- * req.AcceptPermissions 表示用户已确认接受新增权限。
- * @param {plugin$0.InstallRequest} req
- * @returns {$CancellablePromise<void>}
+ * PluginGetSettings 读取插件的全部配置项。
+ * @param {string} pluginID
+ * @returns {$CancellablePromise<{ [_ in string]?: string }>}
  */
-export function PluginInstall(req) {
-    return $Call.ByID(967200613, req);
+export function PluginGetSettings(pluginID) {
+    return $Call.ByID(189120783, pluginID).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType32($result);
+    }));
 }
 
 /**
- * PluginInstallArchive 从离线包安装。
+ * PluginInstallPlan 按已确认的安装计划完成安装。
  * 
- * trust 表示用户确认信任该来源；acceptPermissions 表示接受升级新增的权限。
- * @param {string} fileName
- * @param {string} contentBase64
+ * trust 表示用户已确认信任来源；acceptPermissions 表示接受新增权限。
+ * 计划 ID 由 PluginPreviewPackages 返回；计划过期或已被使用时会明确报错，
+ * 不会重新求解后偷偷换包。
+ * @param {string} planID
  * @param {boolean} trust
  * @param {boolean} acceptPermissions
  * @returns {$CancellablePromise<void>}
  */
-export function PluginInstallArchive(fileName, contentBase64, trust, acceptPermissions) {
-    return $Call.ByID(4081650757, fileName, contentBase64, trust, acceptPermissions);
+export function PluginInstallPlan(planID, trust, acceptPermissions) {
+    return $Call.ByID(1570705554, planID, trust, acceptPermissions);
 }
 
 /**
@@ -447,70 +459,49 @@ export function PluginInvoke(id, handler, args) {
  */
 export function PluginList() {
     return $Call.ByID(2956286346).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType33($result);
+        return $$createType34($result);
+    }));
+}
+
+/**
+ * PluginListSources 返回当前配置的全部插件源。
+ * 
+ * 返回的列表始终非空：从未配置过时是「只有内置官方源」。
+ * @returns {$CancellablePromise<plugin$0.RegistrySource[]>}
+ */
+export function PluginListSources() {
+    return $Call.ByID(2631566316).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType36($result);
     }));
 }
 
 /**
  * PluginMarketplace 返回插件市场快照（refresh 为 true 时强制刷新索引）。
+ * 
+ * 索引读取失败不会让插件管理界面不可用：错误随快照返回，界面提示后可重试。
  * @param {boolean} refresh
- * @returns {$CancellablePromise<plugin$0.MarketplaceSnapshot | null>}
+ * @returns {$CancellablePromise<plugin$0.MarketplaceSnapshot>}
  */
 export function PluginMarketplace(refresh) {
     return $Call.ByID(3960100065, refresh).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType35($result);
+        return $$createType37($result);
     }));
 }
 
 /**
- * PluginPreviewArchive 预览从离线包安装（包内容以 base64 传入）。
+ * PluginPreviewPackages 预览一批插件包的安装计划。
  * 
- * 前端拖入或选中 .zip 后先调它：拿到权限清单、依赖闭包与风险提示，
- * 用户在弹窗里确认后再调 PluginInstallArchive。
- * @param {string} fileName
- * @param {string} contentBase64
+ * resolveDependencies 为 false 时只读取清单（不联网），用于界面快速渲染卡片；
+ * 为 true 时求解完整依赖闭包并生成安装计划，返回的 planId 用于 PluginInstallPlan。
+ * offline 为 true 时禁止访问网络：依赖只能来自本批次的包、本地已装版本或本地缓存。
+ * @param {plugin$0.PackageInputWire[]} inputs
+ * @param {boolean} resolveDependencies
+ * @param {boolean} offline
  * @returns {$CancellablePromise<plugin$0.InstallPreview | null>}
  */
-export function PluginPreviewArchive(fileName, contentBase64) {
-    return $Call.ByID(2938271240, fileName, contentBase64).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType37($result);
-    }));
-}
-
-/**
- * PluginPreviewArchiveBasic 快速预览离线包的基本信息（不求解依赖）。
- * @param {string} fileName
- * @param {string} contentBase64
- * @returns {$CancellablePromise<plugin$0.InstallPreview | null>}
- */
-export function PluginPreviewArchiveBasic(fileName, contentBase64) {
-    return $Call.ByID(2218909406, fileName, contentBase64).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType37($result);
-    }));
-}
-
-/**
- * PluginPreviewBasic 快速预览插件包基本信息（本地完成，不联网）。
- * 
- * 界面先用它渲染插件卡片，再调 PluginPreviewInstall 补齐依赖计划 ——
- * 依赖求解可能要访问官方索引，不该让基本信息陪着一起等。
- * @param {plugin$0.InstallRequest} req
- * @returns {$CancellablePromise<plugin$0.InstallPreview | null>}
- */
-export function PluginPreviewBasic(req) {
-    return $Call.ByID(3163269864, req).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType37($result);
-    }));
-}
-
-/**
- * PluginPreviewInstall 生成安装预览（权限确认弹窗的数据源）。
- * @param {plugin$0.InstallRequest} req
- * @returns {$CancellablePromise<plugin$0.InstallPreview | null>}
- */
-export function PluginPreviewInstall(req) {
-    return $Call.ByID(1791724065, req).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType37($result);
+export function PluginPreviewPackages(inputs, resolveDependencies, offline) {
+    return $Call.ByID(2906636251, inputs, resolveDependencies, offline).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType39($result);
     }));
 }
 
@@ -529,11 +520,11 @@ export function PluginReadAsset(id, version, path) {
 }
 
 /**
- * PluginRegistryURL 返回当前插件索引地址。
+ * PluginRecoverError 返回启动时插件事务恢复遇到的问题（正常时为空）。
  * @returns {$CancellablePromise<string>}
  */
-export function PluginRegistryURL() {
-    return $Call.ByID(216631318);
+export function PluginRecoverError() {
+    return $Call.ByID(4247482940);
 }
 
 /**
@@ -554,22 +545,34 @@ export function PluginRollback(id) {
 }
 
 /**
- * PluginSetEnabled 启用或停用插件。
- * @param {string} id
- * @param {boolean} enabled
+ * PluginSaveSources 整体替换插件源列表（新增 / 删除 / 启停都走这一个入口）。
+ * 
+ * 列表会写入本地 SQLite（app_settings），重启后自动恢复。传空列表会回落到
+ * 宿主内置的官方源。
+ * 
+ * 关于验签：内置官方源必须提供能通过验签的索引；用户自添加的来源签名可选，
+ * 没有签名按未验签处理（安装时要求用户确认信任），但签名存在却校验失败会被拒绝。
+ * @param {plugin$0.RegistrySource[]} sources
  * @returns {$CancellablePromise<void>}
  */
-export function PluginSetEnabled(id, enabled) {
-    return $Call.ByID(2846828275, id, enabled);
+export function PluginSaveSources(sources) {
+    return $Call.ByID(2775758967, sources);
 }
 
 /**
- * PluginSetRegistryURL 更换插件索引地址（镜像或私有源）。
- * @param {string} url
- * @returns {$CancellablePromise<void>}
+ * PluginSetEnabled 启用或停用插件。
+ * 
+ * 停用被其它插件依赖的插件时默认拒绝；cascade 为 true 时级联停用依赖方。
+ * 返回被一并停用（或本次实际变更）的插件 id。
+ * @param {string} id
+ * @param {boolean} enabled
+ * @param {boolean} cascade
+ * @returns {$CancellablePromise<string[]>}
  */
-export function PluginSetRegistryURL(url) {
-    return $Call.ByID(2367306142, url);
+export function PluginSetEnabled(id, enabled, cascade) {
+    return $Call.ByID(2846828275, id, enabled, cascade).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType4($result);
+    }));
 }
 
 /**
@@ -594,11 +597,36 @@ export function PluginSetTrusted(id, trusted) {
 }
 
 /**
+ * PluginSignatureEnabled 报告宿主是否配置了官方索引签名公钥。
+ * @returns {$CancellablePromise<boolean>}
+ */
+export function PluginSignatureEnabled() {
+    return $Call.ByID(1353569141);
+}
+
+/**
+ * PluginSourceMarketplace 返回「单个来源」的插件列表（不看启用状态）。
+ * 
+ * 设置里选中某个源时用它展示该源有哪些插件 —— 被禁用的来源也要能查看，
+ * 否则用户没法在启用之前判断它值不值得信任。
+ * @param {string} url
+ * @param {boolean} refresh
+ * @returns {$CancellablePromise<$models.PluginSourceSnapshot | null>}
+ */
+export function PluginSourceMarketplace(url, refresh) {
+    return $Call.ByID(346543846, url, refresh).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType41($result);
+    }));
+}
+
+/**
  * PluginUninstall 卸载插件。
  * 
  * force 为 false 时，被其它插件依赖会被拒绝，并在错误里说明依赖方；
  * force 为 true 时先停用依赖它的插件（含传递依赖）再卸载，
  * 返回被停用的插件 id，供前端提示用户。
+ * 
+ * 卸载默认保留插件的配置数据，彻底清除请另调 PluginClearData。
  * @param {string} id
  * @param {boolean} force
  * @returns {$CancellablePromise<string[]>}
@@ -610,7 +638,7 @@ export function PluginUninstall(id, force) {
 }
 
 /**
- * PluginUpgrade 把插件升级到最新版本。
+ * PluginUpgrade 把插件升级到最新版本（内部复用同一套安装计划流程）。
  * @param {string} id
  * @param {boolean} acceptPermissions
  * @returns {$CancellablePromise<void>}
@@ -631,7 +659,7 @@ export function PreviewTemplate(sqlText, variables) {
 
 /**
  * QueryVariableOptions 执行 SQL 取变量的动态选项。
- *
+ * 
  * database 非空时按所选库 / 模式执行（语义与查询、命令执行器一致，见
  * DBService.QueryOptionsForVariable），空表示用连接配置里的默认库。
  * @param {number} connID
@@ -641,7 +669,7 @@ export function PreviewTemplate(sqlText, variables) {
  */
 export function QueryVariableOptions(connID, database, query) {
     return $Call.ByID(4283202503, connID, database, query).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType39($result);
+        return $$createType43($result);
     }));
 }
 
@@ -772,7 +800,7 @@ export function TestConnection(conn) {
  */
 export function UpdateSnapshot() {
     return $Call.ByID(165835436).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType40($result);
+        return $$createType44($result);
     }));
 }
 
@@ -792,7 +820,7 @@ export function ValidateScript(source) {
  */
 export function ValidateTemplate(sqlText) {
     return $Call.ByID(763172341, sqlText).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType41($result);
+        return $$createType45($result);
     }));
 }
 
@@ -861,13 +889,17 @@ const $$createType28 = $Create.Array($$createType11);
 const $$createType29 = $Create.Map($Create.Any, $$createType19);
 const $$createType30 = plugin$0.UpdateInfo.createFrom;
 const $$createType31 = $Create.Array($$createType30);
-const $$createType32 = plugin$0.InstalledInfo.createFrom;
-const $$createType33 = $Create.Array($$createType32);
-const $$createType34 = plugin$0.MarketplaceSnapshot.createFrom;
-const $$createType35 = $Create.Nullable($$createType34);
-const $$createType36 = plugin$0.InstallPreview.createFrom;
-const $$createType37 = $Create.Nullable($$createType36);
-const $$createType38 = $Create.Map($Create.Any, $Create.Any);
-const $$createType39 = $Create.Array($$createType38);
-const $$createType40 = update$0.Snapshot.createFrom;
-const $$createType41 = utils$0.TemplateCheck.createFrom;
+const $$createType32 = $Create.Map($Create.Any, $Create.Any);
+const $$createType33 = plugin$0.InstalledInfo.createFrom;
+const $$createType34 = $Create.Array($$createType33);
+const $$createType35 = plugin$0.RegistrySource.createFrom;
+const $$createType36 = $Create.Array($$createType35);
+const $$createType37 = plugin$0.MarketplaceSnapshot.createFrom;
+const $$createType38 = plugin$0.InstallPreview.createFrom;
+const $$createType39 = $Create.Nullable($$createType38);
+const $$createType40 = $models.PluginSourceSnapshot.createFrom;
+const $$createType41 = $Create.Nullable($$createType40);
+const $$createType42 = $Create.Map($Create.Any, $Create.Any);
+const $$createType43 = $Create.Array($$createType42);
+const $$createType44 = update$0.Snapshot.createFrom;
+const $$createType45 = utils$0.TemplateCheck.createFrom;

@@ -1,27 +1,34 @@
 <script setup lang="ts">
 /** 设置（单例标签页）：只展示工具箱自身的设置，改动即时生效并自动保存 */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Button from '@/components/ui/Button.vue'
 import Combobox from '@/components/ui/Combobox.vue'
 import Field from '@/components/ui/Field.vue'
 import Icon from '@/components/ui/Icon.vue'
+import Input from '@/components/ui/Input.vue'
 import Slider from '@/components/ui/Slider.vue'
 import Switch from '@/components/ui/Switch.vue'
+import Tag from '@/components/ui/Tag.vue'
 import { fetchSystemFonts } from '@/api/fonts'
 import { useConfigStore } from '@/stores/configStore'
 import { useLogStore } from '@/stores/logStore'
 import { useMetadataStore } from '@/stores/metadataStore'
+import { usePluginStore } from '@/stores/pluginStore'
 import { useUpdateStore } from '@/stores/updateStore'
 import { installUpdate } from '@/utils/appUpdate'
 import { buildFontOptions } from '@/utils/fonts'
+import { notify } from '@/utils/notify'
+import { pendingSettingPanel } from '@/utils/settingsNav'
 import { SQL_TRIGGER_MODE_OPTIONS, parseSqlTriggerMode } from '@/utils/sql/sqlCompletionTrigger'
 import { parseShowSystemDatabases } from '@/utils/sql/sqlVisibility'
 import { parsePlaceholderTabJump } from '@/utils/sql/template/templatePlaceholder'
-import type { ThemeMode } from '@/types'
+import type { PluginRegistrySource, ThemeMode } from '@/types'
 
 const configStore = useConfigStore()
 const logStore = useLogStore()
 const metadataStore = useMetadataStore()
+/** 插件源由插件 store 统一维护（插件市场页与本页共用） */
+const pluginStore = usePluginStore()
 /** 更新状态由后端快照驱动（见 stores/updateStore.ts），本页只读 */
 const updateStore = useUpdateStore()
 
@@ -71,6 +78,13 @@ const SETTING_GROUPS: SettingNavGroup[] = [
     ],
   },
   {
+    id: 'plugins',
+    label: '插件',
+    items: [
+      { id: 'plugins', label: '插件源', icon: 'puzzle' },
+    ],
+  },
+  {
     id: 'system',
     label: '系统',
     items: [
@@ -101,6 +115,20 @@ function selectTab(id: string): void {
     expandedGroups.value = [...expandedGroups.value, group.id]
   }
 }
+
+/*
+ * 别的页面跳过来时按目标面板定位（例如插件市场点「管理来源」）。
+ *
+ * 用 immediate 是因为存在两种时序：设置页还没挂载时目标先写入，
+ * 挂载后要立刻用上；已经挂载时则由 watch 实时响应。
+ */
+watch(pendingSettingPanel, (id) => {
+  if (!id) {
+    return
+  }
+  selectTab(id)
+  pendingSettingPanel.value = ''
+}, { immediate: true })
 
 // ---------------------------------------------------------------- 外观
 
@@ -216,7 +244,6 @@ const logMaxLines = computed({
 const metadataCache = computed(() => ({
   databases: Object.keys(metadataStore.databases).length,
   tables: Object.keys(metadataStore.tables).length,
-  columns: Object.keys(metadataStore.columns).length,
 }))
 
 /** 页内状态行（3 秒后淡出） */
@@ -291,9 +318,90 @@ function handleInstallUpdate() {
   void installUpdate()
 }
 
+// ---------------------------------------------------------------- 插件源
+
+/** 新增来源的地址输入 */
+const newSourceUrl = ref('')
+/** 新增来源的名称输入（可选） */
+const newSourceName = ref('')
+
+/** 已保存的来源列表 */
+const pluginSources = computed(() => pluginStore.sources)
+
+/** 选中来源的插件简略列表 */
+const sourcePreview = computed(() => pluginStore.sourceSnapshot)
+
+/** 添加一个插件源 */
+async function addPluginSource(): Promise<void> {
+  const url = newSourceUrl.value.trim()
+  if (!url) {
+    notify.warning('请填写插件源地址')
+    return
+  }
+  if (pluginSources.value.some(source => source.url === url)) {
+    notify.warning('该插件源已存在')
+    return
+  }
+  try {
+    await pluginStore.updateSources([
+      ...pluginSources.value,
+      { url, name: newSourceName.value.trim(), enabled: true },
+    ])
+    newSourceUrl.value = ''
+    newSourceName.value = ''
+    notify.success('插件源已添加')
+  }
+  catch (e) {
+    notify.error(e instanceof Error ? e.message : String(e))
+  }
+}
+
+/** 删除一个插件源 */
+async function removePluginSource(source: PluginRegistrySource): Promise<void> {
+  try {
+    await pluginStore.updateSources(
+      pluginSources.value.filter(item => item.url !== source.url),
+    )
+    notify.success('插件源已删除')
+  }
+  catch (e) {
+    notify.error(e instanceof Error ? e.message : String(e))
+  }
+}
+
+/** 启用 / 停用一个插件源（停用后不参与市场合并，但仍可单独查看） */
+async function togglePluginSource(source: PluginRegistrySource, enabled: boolean): Promise<void> {
+  try {
+    await pluginStore.updateSources(
+      pluginSources.value.map(item => (item.url === source.url ? { ...item, enabled } : item)),
+    )
+  }
+  catch (e) {
+    notify.error(e instanceof Error ? e.message : String(e))
+  }
+}
+
+/** 选中某个来源：右侧预览它提供哪些插件 */
+function pickPluginSource(source: PluginRegistrySource): void {
+  void pluginStore.loadSourceSnapshot(source.url)
+}
+
+/** 强制刷新选中来源的插件列表 */
+function refreshSourcePreview(): void {
+  if (pluginStore.previewSourceUrl) {
+    void pluginStore.loadSourceSnapshot(pluginStore.previewSourceUrl, true)
+  }
+}
+
 onMounted(async () => {
   // 打开本页时对齐一次权威状态：即便更新早就开始（启动自动检查），这里也能看到
   void updateStore.refresh()
+  // 插件源列表是本地读取，先拉一次并顺带预览第一个来源
+  void pluginStore.loadSources().then(() => {
+    if (pluginStore.previewSourceUrl) {
+      void pluginStore.loadSourceSnapshot(pluginStore.previewSourceUrl)
+    }
+  })
   try {
     systemFonts.value = await fetchSystemFonts()
   }
@@ -356,7 +464,7 @@ onBeforeUnmount(() => {
         </p>
 
         <!-- 外观 -->
-        <section v-show="activeTab === 'general'" class="max-w-3xl space-y-1">
+        <section v-show="activeTab === 'general'" class="space-y-1">
           <Field label="主题">
             <Combobox v-model="theme" :options="themeOptions" />
           </Field>
@@ -383,7 +491,7 @@ onBeforeUnmount(() => {
         </section>
 
         <!-- 编辑器 -->
-        <section v-show="activeTab === 'editor'" class="max-w-3xl space-y-1">
+        <section v-show="activeTab === 'editor'" class="space-y-1">
           <Field label="编辑器字体 · 英文">
             <Combobox
               v-model="editorFontFamily"
@@ -402,7 +510,7 @@ onBeforeUnmount(() => {
         </section>
 
         <!-- SQL -->
-        <section v-show="activeTab === 'sql'" class="max-w-3xl space-y-1">
+        <section v-show="activeTab === 'sql'" class="space-y-1">
           <Field label="提示触发">
             <Combobox v-model="sqlTriggerMode" :options="triggerChoices" />
           </Field>
@@ -417,14 +525,14 @@ onBeforeUnmount(() => {
         </section>
 
         <!-- 模板 -->
-        <section v-show="activeTab === 'template'" class="max-w-3xl space-y-1">
+        <section v-show="activeTab === 'template'" class="space-y-1">
           <Field label="占位符跳转">
             <Switch v-model="templatePlaceholderTab" />
           </Field>
         </section>
 
         <!-- 高级 -->
-        <section v-show="activeTab === 'advanced'" class="max-w-3xl space-y-1">
+        <section v-show="activeTab === 'advanced'" class="space-y-1">
           <Field label="日志保留条数">
             <div class="flex items-center gap-3">
               <Slider v-model="logMaxLines" :min="50" :max="1000" :step="50" class="w-56" />
@@ -435,8 +543,7 @@ onBeforeUnmount(() => {
           <Field label="元数据缓存">
             <div class="flex items-center gap-3">
               <span class="text-sm text-muted">
-                {{ metadataCache.databases }} 个库 · {{ metadataCache.tables }} 份库表清单 ·
-                {{ metadataCache.columns }} 张表的字段
+                {{ metadataCache.databases }} 个库 · {{ metadataCache.tables }} 张表
               </span>
               <Button variant="secondary" size="sm" @click="clearMetadataCache">
                 清空缓存
@@ -444,7 +551,8 @@ onBeforeUnmount(() => {
             </div>
           </Field>
 
-          <Field label="恢复默认设置">
+          <!-- 标签就是按钮本身，不再重复一遍「恢复默认设置」 -->
+          <Field>
             <div class="flex items-center gap-2">
               <Button
                 :variant="resetArmed ? 'danger' : 'secondary'"
@@ -461,7 +569,7 @@ onBeforeUnmount(() => {
         </section>
 
         <!-- 更新 -->
-        <section v-show="activeTab === 'update'" class="max-w-3xl space-y-1">
+        <section v-show="activeTab === 'update'" class="space-y-1">
           <Field label="当前版本">
             <span class="text-sm text-muted">{{ currentVersionLabel }}</span>
           </Field>
@@ -470,7 +578,8 @@ onBeforeUnmount(() => {
             <Switch v-model="autoUpdate" />
           </Field>
 
-          <Field label="检查更新">
+          <!-- 标签与按钮文案重复，去掉标签让按钮自己说话 -->
+          <Field>
             <div class="flex items-center gap-3">
               <Button
                 variant="secondary"
@@ -538,6 +647,102 @@ onBeforeUnmount(() => {
               </Button>
             </div>
           </Field>
+        </section>
+
+        <!-- 插件源（面板标题已在左侧菜单上，这里不再重复） -->
+        <section v-show="activeTab === 'plugins'" class="space-y-3">
+          <div class="plugin-sources">
+            <ul class="plugin-sources__list">
+              <li v-for="source in pluginSources" :key="source.url" class="plugin-sources__item">
+                <Switch
+                  :model-value="source.enabled"
+                  title="停用后不参与市场合并，但仍可单独查看"
+                  @update:model-value="togglePluginSource(source, $event)"
+                />
+                <button
+                  type="button"
+                  class="plugin-sources__pick"
+                  :class="{ 'is-active': pluginStore.previewSourceUrl === source.url }"
+                  :title="source.url"
+                  @click="pickPluginSource(source)"
+                >
+                  <span class="plugin-sources__name">{{ source.name || source.url }}</span>
+                  <span class="plugin-sources__url">{{ source.url }}</span>
+                </button>
+                <Button variant="ghost" size="sm" @click="removePluginSource(source)">删除</Button>
+              </li>
+              <li v-if="pluginSources.length === 0" class="plugin-sources__empty">
+                未配置时使用内置官方源。
+              </li>
+            </ul>
+
+            <div class="plugin-sources__add">
+              <Input
+                v-model="newSourceUrl"
+                size="sm"
+                class="plugin-sources__url-input"
+                placeholder="https://example.com/registry.json"
+              />
+              <Input v-model="newSourceName" size="sm" class="plugin-sources__name-input" placeholder="名称（可选）" />
+              <Button size="sm" @click="addPluginSource">添加</Button>
+            </div>
+          </div>
+
+          <!-- 选中来源的插件简略列表 -->
+          <div v-if="pluginStore.previewSourceUrl" class="plugin-sources__preview">
+            <div class="plugin-sources__preview-head">
+              <span class="plugin-sources__preview-title">
+                {{ sourcePreview?.source.name || pluginStore.previewSourceUrl }}
+              </span>
+              <Tag
+                v-if="sourcePreview?.source.official"
+                tone="brand"
+                effect="plain"
+                size="sm"
+              >
+                官方源
+              </Tag>
+              <Tag
+                v-if="sourcePreview?.source.state === 'ready'"
+                :tone="sourcePreview.source.verified ? 'success' : 'warning'"
+                effect="plain"
+                size="sm"
+              >
+                {{ sourcePreview.source.verified ? '已验签' : '未验签' }}
+              </Tag>
+              <Tag
+                v-else-if="sourcePreview?.source.state === 'error'"
+                tone="danger"
+                effect="plain"
+                size="sm"
+              >
+                读取失败
+              </Tag>
+              <span class="plugin-sources__preview-count">
+                共 {{ sourcePreview?.items.length ?? 0 }} 个插件
+              </span>
+              <Button variant="ghost" size="sm" @click="refreshSourcePreview">
+                <Icon name="refresh" />
+                刷新
+              </Button>
+            </div>
+
+            <p v-if="sourcePreview?.source.error" class="plugin-sources__error">
+              {{ sourcePreview.source.error }}
+            </p>
+
+            <ul v-else-if="sourcePreview && sourcePreview.items.length > 0" class="plugin-sources__plugins">
+              <li v-for="item in sourcePreview.items" :key="item.id" class="plugin-sources__plugin">
+                <Icon class="plugin-sources__plugin-icon" :name="item.icon || 'puzzle'" />
+                <span class="plugin-sources__plugin-name">{{ item.name }}</span>
+                <span class="plugin-sources__plugin-version">v{{ item.version }}</span>
+                <Tag v-if="item.installed" tone="info" effect="plain" size="sm">已安装</Tag>
+                <span v-if="item.description" class="plugin-sources__plugin-desc">{{ item.description }}</span>
+              </li>
+            </ul>
+
+            <p v-else class="text-sm text-muted">该来源暂无插件。</p>
+          </div>
         </section>
       </div>
     </div>
@@ -676,5 +881,182 @@ onBeforeUnmount(() => {
   min-width: 0;
   padding: 10px 24px 24px;
   overflow-y: auto;
+}
+
+/*
+ * 设置项标签：按内容自适应宽度，且永不换行。
+ *
+ * Field 的默认标签列是固定 7rem，像「编辑器字体 · 英文」这种中文标签
+ * 在 7rem 里放不下就会折成两行，看起来像被挤扁；这里放宽下限并禁止换行，
+ * 长标签由内容决定宽度，控件（flex-1）拿走剩下的空间。
+ */
+.settings-view__content :deep(.field__label) {
+  width: auto;
+  min-width: 7rem;
+  white-space: nowrap;
+}
+
+/* ---------------- 插件源 ---------------- */
+
+.plugin-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.plugin-sources__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plugin-sources__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+
+.plugin-sources__pick {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  min-width: 0;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.plugin-sources__pick:hover {
+  background: var(--hover-bg);
+}
+
+.plugin-sources__pick.is-active {
+  background: var(--active-bg);
+  color: var(--brand-color);
+}
+
+.plugin-sources__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--app-font-size-sm);
+}
+
+.plugin-sources__url {
+  max-width: 34rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: var(--app-font-size-xs);
+}
+
+.plugin-sources__empty {
+  color: var(--text-muted);
+  font-size: var(--app-font-size-xs);
+}
+
+.plugin-sources__add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.plugin-sources__url-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.plugin-sources__name-input {
+  width: 12rem;
+}
+
+.plugin-sources__preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--surface-color);
+}
+
+.plugin-sources__preview-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.plugin-sources__preview-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--app-font-size-sm);
+  font-weight: 600;
+}
+
+.plugin-sources__preview-count {
+  color: var(--text-muted);
+  font-size: var(--app-font-size-xs);
+}
+
+.plugin-sources__error {
+  margin: 0;
+  color: var(--danger-color);
+  font-size: var(--app-font-size-xs);
+}
+
+.plugin-sources__plugins {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plugin-sources__plugin {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--app-font-size-xs);
+}
+
+.plugin-sources__plugin-icon {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.plugin-sources__plugin-name {
+  flex: 0 0 auto;
+}
+
+.plugin-sources__plugin-version {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.plugin-sources__plugin-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
 }
 </style>

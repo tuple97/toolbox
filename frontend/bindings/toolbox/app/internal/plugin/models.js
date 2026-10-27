@@ -24,7 +24,7 @@ export class CommandContribution {
     constructor($$source = {}) {
         if (!("id" in $$source)) {
             /**
-             * ID 命令标识，形如 "插件id.命令名"
+             * ID 命令标识，必须形如 "<插件id>.<命令名>"
              * @member
              * @type {string}
              */
@@ -110,6 +110,14 @@ export class Engines {
              */
             this["toolbox"] = undefined;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * PluginAPI 插件依赖的宿主插件 API 版本范围，例如 "^1.0.0"
+             * @member
+             * @type {string | undefined}
+             */
+            this["pluginApi"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -126,61 +134,9 @@ export class Engines {
 }
 
 /**
- * InstallPlanItem 依赖求解后单个插件的动作。
- */
-export class InstallPlanItem {
-    /**
-     * Creates a new InstallPlanItem instance.
-     * @param {Partial<InstallPlanItem>} [$$source = {}] - The source object to create the InstallPlanItem.
-     */
-    constructor($$source = {}) {
-        if (!("id" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["id"] = "";
-        }
-        if (!("version" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["version"] = "";
-        }
-        if (!("action" in $$source)) {
-            /**
-             * Action install / upgrade / keep
-             * @member
-             * @type {string}
-             */
-            this["action"] = "";
-        }
-        if (!("scanned" in $$source)) {
-            /**
-             * Scanned 依赖由安装时扫描同级目录得到（用户并未显式选中），会就地安装
-             * @member
-             * @type {boolean}
-             */
-            this["scanned"] = false;
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new InstallPlanItem instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {InstallPlanItem}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new InstallPlanItem(/** @type {Partial<InstallPlanItem>} */($$parsedSource));
-    }
-}
-
-/**
- * InstallPreview 安装前的预览信息（权限确认弹窗的数据源）。
+ * InstallPreview 安装预览：完整依赖计划 + 需要用户确认的事项。
+ * 
+ * 预览与安装共用同一个计划（PlanID），安装时不会重新求解。
  */
 export class InstallPreview {
     /**
@@ -188,173 +144,37 @@ export class InstallPreview {
      * @param {Partial<InstallPreview>} [$$source = {}] - The source object to create the InstallPreview.
      */
     constructor($$source = {}) {
-        if (!("id" in $$source)) {
+        if (!("planId" in $$source)) {
             /**
+             * PlanID 安装计划标识；调用 InstallPlan 时回传它
              * @member
              * @type {string}
              */
-            this["id"] = "";
+            this["planId"] = "";
         }
-        if (!("name" in $$source)) {
+        if (!("expiresAt" in $$source)) {
             /**
+             * ExpiresAt 计划过期时间（RFC3339）
              * @member
              * @type {string}
              */
-            this["name"] = "";
+            this["expiresAt"] = "";
         }
-        if (!("version" in $$source)) {
+        if (!("packages" in $$source)) {
             /**
+             * Packages 用户显式选择的包
              * @member
-             * @type {string}
+             * @type {PackagePreview[]}
              */
-            this["version"] = "";
-        }
-        if (!("publisher" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["publisher"] = "";
-        }
-        if (!("description" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["description"] = "";
-        }
-        if (!("icon" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["icon"] = "";
-        }
-        if (!("homepage" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["homepage"] = "";
-        }
-        if (!("license" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["license"] = "";
-        }
-        if (!("source" in $$source)) {
-            /**
-             * Source 来源类型
-             * @member
-             * @type {string}
-             */
-            this["source"] = "";
-        }
-        if (!("sourceRef" in $$source)) {
-            /**
-             * SourceRef 来源引用
-             * @member
-             * @type {string}
-             */
-            this["sourceRef"] = "";
-        }
-        if (!("official" in $$source)) {
-            /**
-             * Official 是否官方可信（可直接安装，无需二次确认）
-             * @member
-             * @type {boolean}
-             */
-            this["official"] = false;
-        }
-        if (!("trusted" in $$source)) {
-            /**
-             * Trusted 该来源/发布者是否已被本地信任
-             * @member
-             * @type {boolean}
-             */
-            this["trusted"] = false;
-        }
-        if (!("needTrust" in $$source)) {
-            /**
-             * NeedTrust 是否需要用户点击「信任并安装」
-             * @member
-             * @type {boolean}
-             */
-            this["needTrust"] = false;
-        }
-        if (!("checksum" in $$source)) {
-            /**
-             * Checksum 安装包摘要
-             * @member
-             * @type {string}
-             */
-            this["checksum"] = "";
-        }
-        if (!("signed" in $$source)) {
-            /**
-             * Signed 是否带有可验证的发布者签名
-             * @member
-             * @type {boolean}
-             */
-            this["signed"] = false;
-        }
-        if (!("upgrade" in $$source)) {
-            /**
-             * Upgrade 是否为升级既有插件
-             * @member
-             * @type {boolean}
-             */
-            this["upgrade"] = false;
-        }
-        if (!("currentVersion" in $$source)) {
-            /**
-             * CurrentVersion 当前已安装版本（升级时非空）
-             * @member
-             * @type {string}
-             */
-            this["currentVersion"] = "";
-        }
-        if (!("permissions" in $$source)) {
-            /**
-             * Permissions 权限中文描述
-             * @member
-             * @type {string[]}
-             */
-            this["permissions"] = [];
-        }
-        if (!("addedPermissions" in $$source)) {
-            /**
-             * AddedPermissions 本次升级新增的权限（需要用户重新确认）
-             * @member
-             * @type {string[]}
-             */
-            this["addedPermissions"] = [];
-        }
-        if (!("dependencies" in $$source)) {
-            /**
-             * Dependencies 依赖声明
-             * @member
-             * @type {DependencyRef[]}
-             */
-            this["dependencies"] = [];
+            this["packages"] = [];
         }
         if (!("plan" in $$source)) {
             /**
-             * Plan 依赖闭包安装计划
+             * Plan 完整依赖闭包（含已满足的 keep 项）
              * @member
-             * @type {InstallPlanItem[]}
+             * @type {PlanItem[]}
              */
             this["plan"] = [];
-        }
-        if (!("missingDependencies" in $$source)) {
-            /**
-             * MissingDependencies 无法满足的依赖：不阻断安装，由界面标红提示
-             * @member
-             * @type {MissingDependency[]}
-             */
-            this["missingDependencies"] = [];
         }
         if (!("warnings" in $$source)) {
             /**
@@ -363,6 +183,38 @@ export class InstallPreview {
              * @type {string[]}
              */
             this["warnings"] = [];
+        }
+        if (!("needTrust" in $$source)) {
+            /**
+             * NeedTrust 是否存在需要用户确认信任的来源
+             * @member
+             * @type {boolean}
+             */
+            this["needTrust"] = false;
+        }
+        if (!("trustReason" in $$source)) {
+            /**
+             * TrustReason 为什么需要确认信任
+             * @member
+             * @type {string}
+             */
+            this["trustReason"] = "";
+        }
+        if (!("addedPermissions" in $$source)) {
+            /**
+             * AddedPermissions 需要用户确认的新增权限
+             * @member
+             * @type {string[]}
+             */
+            this["addedPermissions"] = [];
+        }
+        if (!("pendingDownloads" in $$source)) {
+            /**
+             * PendingDownloads 需要联网下载的安装包数量
+             * @member
+             * @type {number}
+             */
+            this["pendingDownloads"] = 0;
         }
 
         Object.assign(this, $$source);
@@ -374,109 +226,35 @@ export class InstallPreview {
      * @returns {InstallPreview}
      */
     static createFrom($$source = {}) {
-        const $$createField17_0 = $$createType0;
-        const $$createField18_0 = $$createType0;
-        const $$createField19_0 = $$createType2;
-        const $$createField20_0 = $$createType4;
-        const $$createField21_0 = $$createType6;
-        const $$createField22_0 = $$createType0;
+        const $$createField2_0 = $$createType1;
+        const $$createField3_0 = $$createType3;
+        const $$createField4_0 = $$createType4;
+        const $$createField7_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("permissions" in $$parsedSource) {
-            $$parsedSource["permissions"] = $$createField17_0($$parsedSource["permissions"]);
-        }
-        if ("addedPermissions" in $$parsedSource) {
-            $$parsedSource["addedPermissions"] = $$createField18_0($$parsedSource["addedPermissions"]);
-        }
-        if ("dependencies" in $$parsedSource) {
-            $$parsedSource["dependencies"] = $$createField19_0($$parsedSource["dependencies"]);
+        if ("packages" in $$parsedSource) {
+            $$parsedSource["packages"] = $$createField2_0($$parsedSource["packages"]);
         }
         if ("plan" in $$parsedSource) {
-            $$parsedSource["plan"] = $$createField20_0($$parsedSource["plan"]);
-        }
-        if ("missingDependencies" in $$parsedSource) {
-            $$parsedSource["missingDependencies"] = $$createField21_0($$parsedSource["missingDependencies"]);
+            $$parsedSource["plan"] = $$createField3_0($$parsedSource["plan"]);
         }
         if ("warnings" in $$parsedSource) {
-            $$parsedSource["warnings"] = $$createField22_0($$parsedSource["warnings"]);
+            $$parsedSource["warnings"] = $$createField4_0($$parsedSource["warnings"]);
+        }
+        if ("addedPermissions" in $$parsedSource) {
+            $$parsedSource["addedPermissions"] = $$createField7_0($$parsedSource["addedPermissions"]);
         }
         return new InstallPreview(/** @type {Partial<InstallPreview>} */($$parsedSource));
     }
 }
 
 /**
- * InstallRequest 安装请求。
- */
-export class InstallRequest {
-    /**
-     * Creates a new InstallRequest instance.
-     * @param {Partial<InstallRequest>} [$$source = {}] - The source object to create the InstallRequest.
-     */
-    constructor($$source = {}) {
-        if (!("source" in $$source)) {
-            /**
-             * Source 来源：registry / url / file / local
-             * @member
-             * @type {string}
-             */
-            this["source"] = "";
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * ID registry 来源时必填
-             * @member
-             * @type {string | undefined}
-             */
-            this["id"] = undefined;
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * Version registry 来源时可选，缺省取满足约束的最高版本
-             * @member
-             * @type {string | undefined}
-             */
-            this["version"] = undefined;
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * Ref url / file / local 来源时的地址或路径
-             * @member
-             * @type {string | undefined}
-             */
-            this["ref"] = undefined;
-        }
-        if (!("trust" in $$source)) {
-            /**
-             * Trust 用户是否已确认信任该来源
-             * @member
-             * @type {boolean}
-             */
-            this["trust"] = false;
-        }
-        if (!("acceptPermissions" in $$source)) {
-            /**
-             * AcceptPermissions 升级时是否接受新增权限
-             * @member
-             * @type {boolean}
-             */
-            this["acceptPermissions"] = false;
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new InstallRequest instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {InstallRequest}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new InstallRequest(/** @type {Partial<InstallRequest>} */($$parsedSource));
-    }
-}
-
-/**
  * InstalledInfo 已安装插件的完整信息（插件管理页使用）。
+ * 
+ * 注意 enabled 与 active 的区别：
+ *   - Enabled 表示「用户希望启用」；
+ *   - Active 表示「依据完整依赖闭包与兼容性计算后，确实在运行」。
+ * 
+ * 界面不应把 enabled 直接当成运行状态。
  */
 export class InstalledInfo {
     /**
@@ -549,19 +327,43 @@ export class InstalledInfo {
         }
         if (!("enabled" in $$source)) {
             /**
-             * Enabled 是否启用
+             * Enabled 用户是否希望启用
              * @member
              * @type {boolean}
              */
             this["enabled"] = false;
         }
+        if (!("active" in $$source)) {
+            /**
+             * Active 是否实际已激活（依赖满足 + 兼容 + 已加载）
+             * @member
+             * @type {boolean}
+             */
+            this["active"] = false;
+        }
         if (!("trusted" in $$source)) {
             /**
-             * Trusted 是否已获得用户信任
+             * Trusted 是否已获得用户或官方索引的信任
              * @member
              * @type {boolean}
              */
             this["trusted"] = false;
+        }
+        if (!("trustLevel" in $$source)) {
+            /**
+             * TrustLevel 信任等级：none / user / official
+             * @member
+             * @type {string}
+             */
+            this["trustLevel"] = "";
+        }
+        if (!("trustReason" in $$source)) {
+            /**
+             * TrustReason 信任判定依据
+             * @member
+             * @type {string}
+             */
+            this["trustReason"] = "";
         }
         if (!("official" in $$source)) {
             /**
@@ -611,9 +413,17 @@ export class InstalledInfo {
              */
             this["handlers"] = [];
         }
+        if (!("exports" in $$source)) {
+            /**
+             * Exports 对外公开的后端处理方法
+             * @member
+             * @type {string[]}
+             */
+            this["exports"] = [];
+        }
         if (!("compatible" in $$source)) {
             /**
-             * Compatible 是否与当前宿主版本兼容
+             * Compatible 是否与当前宿主版本及插件 API 版本兼容
              * @member
              * @type {boolean}
              */
@@ -626,6 +436,14 @@ export class InstalledInfo {
              * @type {string}
              */
             this["incompatReason"] = "";
+        }
+        if (!("blockedReason" in $$source)) {
+            /**
+             * BlockedReason 有效状态被阻塞的原因（依赖缺失/被停用/循环依赖等）
+             * @member
+             * @type {string}
+             */
+            this["blockedReason"] = "";
         }
         if (!("inUseBy" in $$source)) {
             /**
@@ -653,11 +471,19 @@ export class InstalledInfo {
         }
         if (!("missingDependencies" in $$source)) {
             /**
-             * MissingDependencies 未满足的依赖（非空表示装了但缺依赖，界面标红）
+             * MissingDependencies 未满足的依赖
              * @member
              * @type {MissingDependency[]}
              */
             this["missingDependencies"] = [];
+        }
+        if (!("manifestOutdated" in $$source)) {
+            /**
+             * ManifestOutdated 清单来自旧协议，需要重新安装才能升级到当前协议
+             * @member
+             * @type {boolean}
+             */
+            this["manifestOutdated"] = false;
         }
         if (!("sidebarGroups" in $$source)) {
             /**
@@ -732,7 +558,6 @@ export class InstalledInfo {
         }
         if (!("previousVersion" in $$source)) {
             /**
-             * PreviousVersion 可回滚到的上一个版本（无则为空）
              * @member
              * @type {string}
              */
@@ -748,58 +573,62 @@ export class InstalledInfo {
      * @returns {InstalledInfo}
      */
     static createFrom($$source = {}) {
-        const $$createField16_0 = $$createType0;
-        const $$createField19_0 = $$createType0;
-        const $$createField20_0 = $$createType0;
-        const $$createField21_0 = $$createType2;
-        const $$createField22_0 = $$createType6;
-        const $$createField23_0 = $$createType8;
-        const $$createField24_0 = $$createType10;
-        const $$createField25_0 = $$createType12;
-        const $$createField26_0 = $$createType14;
-        const $$createField27_0 = $$createType16;
-        const $$createField28_0 = $$createType18;
-        const $$createField29_0 = $$createType19;
-        const $$createField30_0 = $$createType20;
+        const $$createField19_0 = $$createType4;
+        const $$createField20_0 = $$createType4;
+        const $$createField24_0 = $$createType4;
+        const $$createField25_0 = $$createType4;
+        const $$createField26_0 = $$createType6;
+        const $$createField27_0 = $$createType8;
+        const $$createField29_0 = $$createType10;
+        const $$createField30_0 = $$createType12;
+        const $$createField31_0 = $$createType14;
+        const $$createField32_0 = $$createType16;
+        const $$createField33_0 = $$createType18;
+        const $$createField34_0 = $$createType20;
+        const $$createField35_0 = $$createType21;
+        const $$createField36_0 = $$createType22;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("handlers" in $$parsedSource) {
-            $$parsedSource["handlers"] = $$createField16_0($$parsedSource["handlers"]);
+            $$parsedSource["handlers"] = $$createField19_0($$parsedSource["handlers"]);
+        }
+        if ("exports" in $$parsedSource) {
+            $$parsedSource["exports"] = $$createField20_0($$parsedSource["exports"]);
         }
         if ("inUseBy" in $$parsedSource) {
-            $$parsedSource["inUseBy"] = $$createField19_0($$parsedSource["inUseBy"]);
+            $$parsedSource["inUseBy"] = $$createField24_0($$parsedSource["inUseBy"]);
         }
         if ("permissions" in $$parsedSource) {
-            $$parsedSource["permissions"] = $$createField20_0($$parsedSource["permissions"]);
+            $$parsedSource["permissions"] = $$createField25_0($$parsedSource["permissions"]);
         }
         if ("dependencies" in $$parsedSource) {
-            $$parsedSource["dependencies"] = $$createField21_0($$parsedSource["dependencies"]);
+            $$parsedSource["dependencies"] = $$createField26_0($$parsedSource["dependencies"]);
         }
         if ("missingDependencies" in $$parsedSource) {
-            $$parsedSource["missingDependencies"] = $$createField22_0($$parsedSource["missingDependencies"]);
+            $$parsedSource["missingDependencies"] = $$createField27_0($$parsedSource["missingDependencies"]);
         }
         if ("sidebarGroups" in $$parsedSource) {
-            $$parsedSource["sidebarGroups"] = $$createField23_0($$parsedSource["sidebarGroups"]);
+            $$parsedSource["sidebarGroups"] = $$createField29_0($$parsedSource["sidebarGroups"]);
         }
         if ("tools" in $$parsedSource) {
-            $$parsedSource["tools"] = $$createField24_0($$parsedSource["tools"]);
+            $$parsedSource["tools"] = $$createField30_0($$parsedSource["tools"]);
         }
         if ("commands" in $$parsedSource) {
-            $$parsedSource["commands"] = $$createField25_0($$parsedSource["commands"]);
+            $$parsedSource["commands"] = $$createField31_0($$parsedSource["commands"]);
         }
         if ("settings" in $$parsedSource) {
-            $$parsedSource["settings"] = $$createField26_0($$parsedSource["settings"]);
+            $$parsedSource["settings"] = $$createField32_0($$parsedSource["settings"]);
         }
         if ("settingsPanels" in $$parsedSource) {
-            $$parsedSource["settingsPanels"] = $$createField27_0($$parsedSource["settingsPanels"]);
+            $$parsedSource["settingsPanels"] = $$createField33_0($$parsedSource["settingsPanels"]);
         }
         if ("mcpTools" in $$parsedSource) {
-            $$parsedSource["mcpTools"] = $$createField28_0($$parsedSource["mcpTools"]);
+            $$parsedSource["mcpTools"] = $$createField34_0($$parsedSource["mcpTools"]);
         }
         if ("engines" in $$parsedSource) {
-            $$parsedSource["engines"] = $$createField29_0($$parsedSource["engines"]);
+            $$parsedSource["engines"] = $$createField35_0($$parsedSource["engines"]);
         }
         if ("runtime" in $$parsedSource) {
-            $$parsedSource["runtime"] = $$createField30_0($$parsedSource["runtime"]);
+            $$parsedSource["runtime"] = $$createField36_0($$parsedSource["runtime"]);
         }
         return new InstalledInfo(/** @type {Partial<InstalledInfo>} */($$parsedSource));
     }
@@ -863,6 +692,9 @@ export class MCPToolContribution {
 
 /**
  * MarketplaceItem 插件市场列表项（已安装状态与本地对比后的结果）。
+ * 
+ * 同一个插件在多个来源都存在时会各占一条 —— 这样界面能并排看到
+ * 「官方源 v1.2.0」与「第三方源 v1.3.0」的差异。
  */
 export class MarketplaceItem {
     /**
@@ -921,10 +753,34 @@ export class MarketplaceItem {
         }
         if (!("official" in $$source)) {
             /**
+             * Official 是否可信的官方条目（= 索引声明 official 且来源验签通过）
              * @member
              * @type {boolean}
              */
             this["official"] = false;
+        }
+        if (!("sourceUrl" in $$source)) {
+            /**
+             * SourceURL / SourceName 该条目来自哪个插件源
+             * @member
+             * @type {string}
+             */
+            this["sourceUrl"] = "";
+        }
+        if (!("sourceName" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["sourceName"] = "";
+        }
+        if (!("sourceVerified" in $$source)) {
+            /**
+             * SourceVerified 该条目所在来源是否验签通过
+             * @member
+             * @type {boolean}
+             */
+            this["sourceVerified"] = false;
         }
         if (!("installed" in $$source)) {
             /**
@@ -946,6 +802,13 @@ export class MarketplaceItem {
              * @type {boolean}
              */
             this["enabled"] = false;
+        }
+        if (!("active" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["active"] = false;
         }
         if (!("updatable" in $$source)) {
             /**
@@ -978,14 +841,14 @@ export class MarketplaceItem {
      * @returns {MarketplaceItem}
      */
     static createFrom($$source = {}) {
-        const $$createField12_0 = $$createType0;
-        const $$createField13_0 = $$createType0;
+        const $$createField16_0 = $$createType4;
+        const $$createField17_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("permissions" in $$parsedSource) {
-            $$parsedSource["permissions"] = $$createField12_0($$parsedSource["permissions"]);
+            $$parsedSource["permissions"] = $$createField16_0($$parsedSource["permissions"]);
         }
         if ("dependencies" in $$parsedSource) {
-            $$parsedSource["dependencies"] = $$createField13_0($$parsedSource["dependencies"]);
+            $$parsedSource["dependencies"] = $$createField17_0($$parsedSource["dependencies"]);
         }
         return new MarketplaceItem(/** @type {Partial<MarketplaceItem>} */($$parsedSource));
     }
@@ -1002,39 +865,34 @@ export class MarketplaceSnapshot {
     constructor($$source = {}) {
         if (!("state" in $$source)) {
             /**
-             * State idle / loading / ready / error
+             * State idle / ready / error
+             * 
+             * ready 表示至少有一个来源读到了索引；error 表示所有已启用来源都失败；
+             * idle 表示没有任何已启用的来源。
              * @member
              * @type {string}
              */
             this["state"] = "";
         }
-        if (!("source" in $$source)) {
+        if (!("sources" in $$source)) {
             /**
-             * Source 索引地址
+             * Sources 各插件源的状态（含被禁用的，便于界面管理）
              * @member
-             * @type {string}
+             * @type {MarketplaceSource[]}
              */
-            this["source"] = "";
+            this["sources"] = [];
         }
-        if (!("updatedAt" in $$source)) {
+        if (!("signatureEnabled" in $$source)) {
             /**
-             * UpdatedAt 索引自带更新时间
-             * @member
-             * @type {string}
-             */
-            this["updatedAt"] = "";
-        }
-        if (!("verified" in $$source)) {
-            /**
-             * Verified 索引签名是否校验通过
+             * SignatureEnabled 宿主是否配置了索引签名公钥
              * @member
              * @type {boolean}
              */
-            this["verified"] = false;
+            this["signatureEnabled"] = false;
         }
         if (!("error" in $$source)) {
             /**
-             * Error 加载失败原因
+             * Error 汇总的加载失败原因
              * @member
              * @type {string}
              */
@@ -1042,7 +900,7 @@ export class MarketplaceSnapshot {
         }
         if (!("items" in $$source)) {
             /**
-             * Items 条目列表
+             * Items 合并后的条目列表（按来源区分，不去重）
              * @member
              * @type {MarketplaceItem[]}
              */
@@ -1058,12 +916,110 @@ export class MarketplaceSnapshot {
      * @returns {MarketplaceSnapshot}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType22;
+        const $$createField1_0 = $$createType24;
+        const $$createField4_0 = $$createType26;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("sources" in $$parsedSource) {
+            $$parsedSource["sources"] = $$createField1_0($$parsedSource["sources"]);
+        }
         if ("items" in $$parsedSource) {
-            $$parsedSource["items"] = $$createField5_0($$parsedSource["items"]);
+            $$parsedSource["items"] = $$createField4_0($$parsedSource["items"]);
         }
         return new MarketplaceSnapshot(/** @type {Partial<MarketplaceSnapshot>} */($$parsedSource));
+    }
+}
+
+/**
+ * MarketplaceSource 单个插件源在本轮快照中的状态。
+ */
+export class MarketplaceSource {
+    /**
+     * Creates a new MarketplaceSource instance.
+     * @param {Partial<MarketplaceSource>} [$$source = {}] - The source object to create the MarketplaceSource.
+     */
+    constructor($$source = {}) {
+        if (!("url" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["url"] = "";
+        }
+        if (!("name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["name"] = "";
+        }
+        if (!("enabled" in $$source)) {
+            /**
+             * Enabled 是否参与合并展示
+             * @member
+             * @type {boolean}
+             */
+            this["enabled"] = false;
+        }
+        if (!("official" in $$source)) {
+            /**
+             * Official 是否为宿主内置的官方源（只有它会被强制要求验签）
+             * @member
+             * @type {boolean}
+             */
+            this["official"] = false;
+        }
+        if (!("state" in $$source)) {
+            /**
+             * State ready / error / disabled
+             * @member
+             * @type {string}
+             */
+            this["state"] = "";
+        }
+        if (!("verified" in $$source)) {
+            /**
+             * Verified 索引签名是否校验通过
+             * @member
+             * @type {boolean}
+             */
+            this["verified"] = false;
+        }
+        if (!("updatedAt" in $$source)) {
+            /**
+             * UpdatedAt 索引自带更新时间
+             * @member
+             * @type {string}
+             */
+            this["updatedAt"] = "";
+        }
+        if (!("count" in $$source)) {
+            /**
+             * Count 该来源提供的插件条目数
+             * @member
+             * @type {number}
+             */
+            this["count"] = 0;
+        }
+        if (!("error" in $$source)) {
+            /**
+             * Error 读取失败原因
+             * @member
+             * @type {string}
+             */
+            this["error"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new MarketplaceSource instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {MarketplaceSource}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new MarketplaceSource(/** @type {Partial<MarketplaceSource>} */($$parsedSource));
     }
 }
 
@@ -1092,7 +1048,7 @@ export class MissingDependency {
         }
         if (!("reason" in $$source)) {
             /**
-             * Reason 未满足的原因（未安装 / 已装版本不符）
+             * Reason 未满足的原因
              * @member
              * @type {string}
              */
@@ -1114,6 +1070,421 @@ export class MissingDependency {
 }
 
 /**
+ * PackageInputWire 前端传来的安装输入（离线包内容用 base64 承载）。
+ */
+export class PackageInputWire {
+    /**
+     * Creates a new PackageInputWire instance.
+     * @param {Partial<PackageInputWire>} [$$source = {}] - The source object to create the PackageInputWire.
+     */
+    constructor($$source = {}) {
+        if (!("source" in $$source)) {
+            /**
+             * Source 来源：registry / url / file / local / archive
+             * @member
+             * @type {string}
+             */
+            this["source"] = "";
+        }
+        if (!("sourceUrl" in $$source)) {
+            /**
+             * SourceURL registry 来源时指定的插件源地址；留空表示自动跨源挑选
+             * @member
+             * @type {string}
+             */
+            this["sourceUrl"] = "";
+        }
+        if (!("id" in $$source)) {
+            /**
+             * ID registry 来源时的插件标识
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (!("version" in $$source)) {
+            /**
+             * Version registry 来源时可选，缺省取满足约束的最高版本
+             * @member
+             * @type {string}
+             */
+            this["version"] = "";
+        }
+        if (!("ref" in $$source)) {
+            /**
+             * Ref url / file / local 来源的地址或路径；archive 来源的展示名
+             * @member
+             * @type {string}
+             */
+            this["ref"] = "";
+        }
+        if (!("fileName" in $$source)) {
+            /**
+             * FileName 离线包文件名（仅用于展示）
+             * @member
+             * @type {string}
+             */
+            this["fileName"] = "";
+        }
+        if (!("contentBase64" in $$source)) {
+            /**
+             * ContentBase64 离线包内容的 base64 编码
+             * @member
+             * @type {string}
+             */
+            this["contentBase64"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new PackageInputWire instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {PackageInputWire}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new PackageInputWire(/** @type {Partial<PackageInputWire>} */($$parsedSource));
+    }
+}
+
+/**
+ * PackagePreview 单个待安装包的展示信息。
+ */
+export class PackagePreview {
+    /**
+     * Creates a new PackagePreview instance.
+     * @param {Partial<PackagePreview>} [$$source = {}] - The source object to create the PackagePreview.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (!("name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["name"] = "";
+        }
+        if (!("version" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["version"] = "";
+        }
+        if (!("publisher" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["publisher"] = "";
+        }
+        if (!("description" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["description"] = "";
+        }
+        if (!("icon" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["icon"] = "";
+        }
+        if (!("homepage" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["homepage"] = "";
+        }
+        if (!("license" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["license"] = "";
+        }
+        if (!("source" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["source"] = "";
+        }
+        if (!("sourceRef" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["sourceRef"] = "";
+        }
+        if (!("official" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["official"] = false;
+        }
+        if (!("checksum" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["checksum"] = "";
+        }
+        if (!("upgrade" in $$source)) {
+            /**
+             * Upgrade 是否为升级既有插件
+             * @member
+             * @type {boolean}
+             */
+            this["upgrade"] = false;
+        }
+        if (!("currentVersion" in $$source)) {
+            /**
+             * CurrentVersion 当前已安装版本（升级时非空）
+             * @member
+             * @type {string}
+             */
+            this["currentVersion"] = "";
+        }
+        if (!("permissions" in $$source)) {
+            /**
+             * @member
+             * @type {string[]}
+             */
+            this["permissions"] = [];
+        }
+        if (!("addedPermissions" in $$source)) {
+            /**
+             * @member
+             * @type {string[]}
+             */
+            this["addedPermissions"] = [];
+        }
+        if (!("dependencies" in $$source)) {
+            /**
+             * @member
+             * @type {DependencyRef[]}
+             */
+            this["dependencies"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new PackagePreview instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {PackagePreview}
+     */
+    static createFrom($$source = {}) {
+        const $$createField14_0 = $$createType4;
+        const $$createField15_0 = $$createType4;
+        const $$createField16_0 = $$createType6;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("permissions" in $$parsedSource) {
+            $$parsedSource["permissions"] = $$createField14_0($$parsedSource["permissions"]);
+        }
+        if ("addedPermissions" in $$parsedSource) {
+            $$parsedSource["addedPermissions"] = $$createField15_0($$parsedSource["addedPermissions"]);
+        }
+        if ("dependencies" in $$parsedSource) {
+            $$parsedSource["dependencies"] = $$createField16_0($$parsedSource["dependencies"]);
+        }
+        return new PackagePreview(/** @type {Partial<PackagePreview>} */($$parsedSource));
+    }
+}
+
+/**
+ * PlanItem 安装计划中的一条动作。
+ */
+export class PlanItem {
+    /**
+     * Creates a new PlanItem instance.
+     * @param {Partial<PlanItem>} [$$source = {}] - The source object to create the PlanItem.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (!("version" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["version"] = "";
+        }
+        if (!("action" in $$source)) {
+            /**
+             * Action install / upgrade / reinstall / keep
+             * @member
+             * @type {string}
+             */
+            this["action"] = "";
+        }
+        if (!("source" in $$source)) {
+            /**
+             * Source 包的来源类型：registry / url / file / local / batch
+             * @member
+             * @type {string}
+             */
+            this["source"] = "";
+        }
+        if (!("sourceRef" in $$source)) {
+            /**
+             * SourceRef 来源引用（下载地址 / 本地路径 / 包文件名）
+             * @member
+             * @type {string}
+             */
+            this["sourceRef"] = "";
+        }
+        if (!("checksum" in $$source)) {
+            /**
+             * Checksum 安装包摘要
+             * @member
+             * @type {string}
+             */
+            this["checksum"] = "";
+        }
+        if (!("official" in $$source)) {
+            /**
+             * Official 是否可信的官方条目（= 索引声明 official 且该来源验签通过）
+             * @member
+             * @type {boolean}
+             */
+            this["official"] = false;
+        }
+        if (!("sourceVerified" in $$source)) {
+            /**
+             * SourceVerified 该条目所在来源的索引是否验签通过
+             * @member
+             * @type {boolean}
+             */
+            this["sourceVerified"] = false;
+        }
+        if (!("root" in $$source)) {
+            /**
+             * Root 是否为用户显式选择的包
+             * @member
+             * @type {boolean}
+             */
+            this["root"] = false;
+        }
+        if (!("needTrust" in $$source)) {
+            /**
+             * NeedTrust 是否需要用户确认信任
+             * @member
+             * @type {boolean}
+             */
+            this["needTrust"] = false;
+        }
+        if (!("trustReason" in $$source)) {
+            /**
+             * TrustReason 信任判定依据
+             * @member
+             * @type {string}
+             */
+            this["trustReason"] = "";
+        }
+        if (!("addedPermissions" in $$source)) {
+            /**
+             * AddedPermissions 本次相对已安装版本新增的权限
+             * @member
+             * @type {string[]}
+             */
+            this["addedPermissions"] = [];
+        }
+        if (!("cached" in $$source)) {
+            /**
+             * Cached 本地已有可复用的包内容
+             * @member
+             * @type {boolean}
+             */
+            this["cached"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new PlanItem instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {PlanItem}
+     */
+    static createFrom($$source = {}) {
+        const $$createField11_0 = $$createType4;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("addedPermissions" in $$parsedSource) {
+            $$parsedSource["addedPermissions"] = $$createField11_0($$parsedSource["addedPermissions"]);
+        }
+        return new PlanItem(/** @type {Partial<PlanItem>} */($$parsedSource));
+    }
+}
+
+/**
+ * RegistrySource 一个插件源（索引地址）。
+ */
+export class RegistrySource {
+    /**
+     * Creates a new RegistrySource instance.
+     * @param {Partial<RegistrySource>} [$$source = {}] - The source object to create the RegistrySource.
+     */
+    constructor($$source = {}) {
+        if (!("url" in $$source)) {
+            /**
+             * URL 索引地址（registry.json 的完整地址）
+             * @member
+             * @type {string}
+             */
+            this["url"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * Name 展示名；留空时界面回落到地址
+             * @member
+             * @type {string | undefined}
+             */
+            this["name"] = undefined;
+        }
+        if (!("enabled" in $$source)) {
+            /**
+             * Enabled 是否参与合并展示
+             * @member
+             * @type {boolean}
+             */
+            this["enabled"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new RegistrySource instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {RegistrySource}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new RegistrySource(/** @type {Partial<RegistrySource>} */($$parsedSource));
+    }
+}
+
+/**
  * RuntimeSpec 声明插件的运行时形态。
  */
 export class RuntimeSpec {
@@ -1124,7 +1495,7 @@ export class RuntimeSpec {
     constructor($$source = {}) {
         if (/** @type {any} */(false)) {
             /**
-             * Backend 后端运行时：js / wasm / none（缺省为 js）
+             * Backend 后端运行时：js / none（缺省为 js）
              * @member
              * @type {string | undefined}
              */
@@ -1146,6 +1517,17 @@ export class RuntimeSpec {
              */
             this["frontend"] = undefined;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * Exports 对外公开的后端 handler 名。
+             * 
+             * 其它插件只有在「依赖本插件」且「本插件在 Exports 中声明了该 handler」
+             * 时才能调用它。没有列出的 handler 一律视为插件内部实现。
+             * @member
+             * @type {string[] | undefined}
+             */
+            this["exports"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -1156,15 +1538,17 @@ export class RuntimeSpec {
      * @returns {RuntimeSpec}
      */
     static createFrom($$source = {}) {
+        const $$createField3_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("exports" in $$parsedSource) {
+            $$parsedSource["exports"] = $$createField3_0($$parsedSource["exports"]);
+        }
         return new RuntimeSpec(/** @type {Partial<RuntimeSpec>} */($$parsedSource));
     }
 }
 
 /**
  * SettingContribution 插件贡献的配置项（存于 plugin_settings 表）。
- * 
- * 宿主会按 Type 自动渲染成表单项，因此简单配置不需要插件写任何界面代码。
  */
 export class SettingContribution {
     /**
@@ -1246,7 +1630,7 @@ export class SettingContribution {
      * @returns {SettingContribution}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType24;
+        const $$createField5_0 = $$createType28;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("options" in $$parsedSource) {
             $$parsedSource["options"] = $$createField5_0($$parsedSource["options"]);
@@ -1295,9 +1679,6 @@ export class SettingOption {
 
 /**
  * SettingsPanelContribution 插件声明的自定义设置面板。
- * 
- * 声明后宿主在设置页为它建一个页签，内容由插件的
- * api.registerSettingsPanel 渲染；只声明不注册时会提示面板未实现。
  */
 export class SettingsPanelContribution {
     /**
@@ -1419,7 +1800,7 @@ export class ToolContribution {
     constructor($$source = {}) {
         if (!("type" in $$source)) {
             /**
-             * Type 工具类型标识，全局唯一，不得与内置工具重名
+             * Type 工具类型标识，全局唯一；与内置工具同名表示接管该入口
              * @member
              * @type {string}
              */
@@ -1459,8 +1840,7 @@ export class ToolContribution {
         }
         if (/** @type {any} */(false)) {
             /**
-             * Group 侧栏分组 id：可引用 contributes.sidebar.groups 里声明的 id，
-             * 也可直接写分组名（未在 sidebar 中声明时按该名字新建分组）
+             * Group 侧栏分组 id：可引用 contributes.sidebar.groups 里声明的 id
              * @member
              * @type {string | undefined}
              */
@@ -1536,10 +1916,34 @@ export class UpdateInfo {
         }
         if (!("official" in $$source)) {
             /**
+             * Official 是否可信的官方条目（= 索引声明 official 且来源验签通过）
              * @member
              * @type {boolean}
              */
             this["official"] = false;
+        }
+        if (!("sourceUrl" in $$source)) {
+            /**
+             * SourceURL / SourceName 提供该最新版本的插件源
+             * @member
+             * @type {string}
+             */
+            this["sourceUrl"] = "";
+        }
+        if (!("sourceName" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["sourceName"] = "";
+        }
+        if (!("sourceVerified" in $$source)) {
+            /**
+             * SourceVerified 提供该版本的来源是否验签通过
+             * @member
+             * @type {boolean}
+             */
+            this["sourceVerified"] = false;
         }
         if (!("addedPermissions" in $$source)) {
             /**
@@ -1550,7 +1954,7 @@ export class UpdateInfo {
         }
         if (!("canAutoUpgrade" in $$source)) {
             /**
-             * CanAutoUpgrade 权限未扩张时可静默升级
+             * CanAutoUpgrade 权限未扩张且来源已信任时可静默升级
              * @member
              * @type {boolean}
              */
@@ -1566,38 +1970,42 @@ export class UpdateInfo {
      * @returns {UpdateInfo}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType0;
+        const $$createField8_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("addedPermissions" in $$parsedSource) {
-            $$parsedSource["addedPermissions"] = $$createField5_0($$parsedSource["addedPermissions"]);
+            $$parsedSource["addedPermissions"] = $$createField8_0($$parsedSource["addedPermissions"]);
         }
         return new UpdateInfo(/** @type {Partial<UpdateInfo>} */($$parsedSource));
     }
 }
 
 // Private type creation functions
-const $$createType0 = $Create.Array($Create.Any);
-const $$createType1 = DependencyRef.createFrom;
-const $$createType2 = $Create.Array($$createType1);
-const $$createType3 = InstallPlanItem.createFrom;
-const $$createType4 = $Create.Array($$createType3);
-const $$createType5 = MissingDependency.createFrom;
+const $$createType0 = PackagePreview.createFrom;
+const $$createType1 = $Create.Array($$createType0);
+const $$createType2 = PlanItem.createFrom;
+const $$createType3 = $Create.Array($$createType2);
+const $$createType4 = $Create.Array($Create.Any);
+const $$createType5 = DependencyRef.createFrom;
 const $$createType6 = $Create.Array($$createType5);
-const $$createType7 = SidebarGroup.createFrom;
+const $$createType7 = MissingDependency.createFrom;
 const $$createType8 = $Create.Array($$createType7);
-const $$createType9 = ToolContribution.createFrom;
+const $$createType9 = SidebarGroup.createFrom;
 const $$createType10 = $Create.Array($$createType9);
-const $$createType11 = CommandContribution.createFrom;
+const $$createType11 = ToolContribution.createFrom;
 const $$createType12 = $Create.Array($$createType11);
-const $$createType13 = SettingContribution.createFrom;
+const $$createType13 = CommandContribution.createFrom;
 const $$createType14 = $Create.Array($$createType13);
-const $$createType15 = SettingsPanelContribution.createFrom;
+const $$createType15 = SettingContribution.createFrom;
 const $$createType16 = $Create.Array($$createType15);
-const $$createType17 = MCPToolContribution.createFrom;
+const $$createType17 = SettingsPanelContribution.createFrom;
 const $$createType18 = $Create.Array($$createType17);
-const $$createType19 = Engines.createFrom;
-const $$createType20 = RuntimeSpec.createFrom;
-const $$createType21 = MarketplaceItem.createFrom;
-const $$createType22 = $Create.Array($$createType21);
-const $$createType23 = SettingOption.createFrom;
+const $$createType19 = MCPToolContribution.createFrom;
+const $$createType20 = $Create.Array($$createType19);
+const $$createType21 = Engines.createFrom;
+const $$createType22 = RuntimeSpec.createFrom;
+const $$createType23 = MarketplaceSource.createFrom;
 const $$createType24 = $Create.Array($$createType23);
+const $$createType25 = MarketplaceItem.createFrom;
+const $$createType26 = $Create.Array($$createType25);
+const $$createType27 = SettingOption.createFrom;
+const $$createType28 = $Create.Array($$createType27);

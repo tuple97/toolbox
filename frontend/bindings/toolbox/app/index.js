@@ -9,5 +9,6 @@ export {
 
 export {
     AppInfo,
-    AppStartupState
+    AppStartupState,
+    PluginSourceSnapshot
 } from "./models.js";

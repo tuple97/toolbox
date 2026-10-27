@@ -12,17 +12,14 @@ import { computed, ref } from 'vue'
 import {
   checkPluginUpdates,
   fetchMarketplace,
+  fetchPluginSources,
   fetchPlugins,
-  fetchRegistryUrl,
-  installPlugin,
-  installPluginArchive,
-  previewInstall,
-  previewPluginArchive,
-  previewPluginArchiveBasic,
-  previewPluginBasic,
+  fetchSourceMarketplace,
+  installPlan as installPluginPlan,
+  previewPackages as previewPluginPackages,
   reloadPlugins,
   rollbackPlugin,
-  saveRegistryUrl,
+  savePluginSources,
   setPluginEnabled,
   setPluginTrusted,
   uninstallPlugin,
@@ -32,8 +29,12 @@ import { initPluginHost, reloadPluginHost } from '@/plugins/loader'
 import type {
   InstalledPlugin,
   PluginInstallPreview,
-  PluginInstallRequest,
+  PluginMarketplaceItem,
   PluginMarketplaceSnapshot,
+  PluginMarketplaceSource,
+  PluginPackageInput,
+  PluginRegistrySource,
+  PluginSourceSnapshot,
   PluginUpdateInfo,
 } from '@/types'
 
@@ -45,12 +46,11 @@ import type {
  */
 const UPDATE_CHECK_COOLDOWN_MS = 30_000
 
-/** 空的插件索引地址常量，避免模板中到处判空 */
+/** 空的市场快照常量，避免模板中到处判空 */
 const EMPTY_SNAPSHOT: PluginMarketplaceSnapshot = {
   state: 'idle',
-  source: '',
-  updatedAt: '',
-  verified: false,
+  sources: [],
+  signatureEnabled: false,
   error: '',
   items: [],
 }
@@ -73,8 +73,18 @@ export const usePluginStore = defineStore('plugins', () => {
   const checkingUpdates = ref(false)
   /** 最近一次失败原因 */
   const error = ref('')
-  /** 当前索引地址 */
-  const registryUrl = ref('')
+  /** 插件源列表（设置里管理） */
+  const sources = ref<PluginRegistrySource[]>([])
+  /**
+   * 市场页的来源过滤（多选）。
+   *
+   * 空数组表示不过滤，即合并展示全部已启用来源；选了若干个就只看这几个。
+   */
+  const marketFilter = ref<string[]>([])
+  /** 设置里预览的插件源地址 */
+  const previewSourceUrl = ref('')
+  /** 设置里预览到的插件简略列表 */
+  const sourceSnapshot = ref<PluginSourceSnapshot | null>(null)
 
   /** 已启用且受信任的插件 */
   const activePlugins = computed(() =>
@@ -92,6 +102,24 @@ export const usePluginStore = defineStore('plugins', () => {
 
   /** 存在更新的插件数量 */
   const updatableCount = computed(() => updates.value.length)
+
+  /**
+   * 市场页当前要展示的条目。
+   *
+   * 没选来源时不作过滤（合并全部已启用来源）；选了若干个就只保留它们的条目。
+   * 同名插件在多个来源各占一条，因此这里过滤的是「来源」而不是「插件」。
+   */
+  const marketItems = computed<PluginMarketplaceItem[]>(() => {
+    const items = marketplace.value.items
+    if (marketFilter.value.length === 0) {
+      return items
+    }
+    const picked = new Set(marketFilter.value)
+    return items.filter(item => picked.has(item.sourceUrl))
+  })
+
+  /** 市场页来源下拉的选项（含被禁用的，便于用户看出自己挂过哪些源） */
+  const marketSources = computed<PluginMarketplaceSource[]>(() => marketplace.value.sources)
 
   /** 刷新已安装插件列表 */
   async function refreshInstalled(): Promise<void> {
@@ -119,21 +147,46 @@ export const usePluginStore = defineStore('plugins', () => {
     }
   }
 
-  /** 读取当前索引地址 */
-  async function loadRegistryUrl(): Promise<void> {
+  /** 读取插件源列表 */
+  async function loadSources(): Promise<void> {
     try {
-      registryUrl.value = await fetchRegistryUrl()
+      sources.value = await fetchPluginSources()
     }
     catch {
-      registryUrl.value = ''
+      sources.value = []
+    }
+    if (!previewSourceUrl.value && sources.value.length > 0) {
+      previewSourceUrl.value = sources.value[0].url
     }
   }
 
-  /** 更换索引地址 */
-  async function updateRegistryUrl(url: string): Promise<void> {
-    await saveRegistryUrl(url)
-    registryUrl.value = url
+  /**
+   * 整体保存插件源列表（新增 / 删除 / 启停都走这里）。
+   *
+   * 保存后立刻重拉市场：来源变了，合并列表必然要跟着变。
+   */
+  async function updateSources(next: PluginRegistrySource[]): Promise<void> {
+    await savePluginSources(next)
+    await loadSources()
+
+    // 被删掉的来源不能继续当过滤条件，否则市场会一直空着
+    const remaining = new Set(next.map(source => source.url))
+    marketFilter.value = marketFilter.value.filter(url => remaining.has(url))
+    if (previewSourceUrl.value && !next.some(source => source.url === previewSourceUrl.value)) {
+      previewSourceUrl.value = ''
+      sourceSnapshot.value = null
+    }
     await loadMarketplace(true)
+  }
+
+  /** 预览单个来源提供哪些插件（设置里选中某个源时用） */
+  async function loadSourceSnapshot(url: string, refresh = false): Promise<void> {
+    previewSourceUrl.value = url
+    if (!url) {
+      sourceSnapshot.value = null
+      return
+    }
+    sourceSnapshot.value = await fetchSourceMarketplace(url, refresh)
   }
 
   /** 最近一次检查完成的时间戳（含失败），用于给自动检查做冷却 */
@@ -163,86 +216,33 @@ export const usePluginStore = defineStore('plugins', () => {
     }
   }
 
-  /** 生成安装预览 */
-  async function preview(req: PluginInstallRequest): Promise<PluginInstallPreview> {
-    return previewInstall(req)
-  }
-
-  /** 快速预览：只读基本信息，不求解依赖（毫秒级返回） */
-  async function previewBasic(req: PluginInstallRequest): Promise<PluginInstallPreview> {
-    return previewPluginBasic(req)
-  }
-
-  /** 生成离线包的安装预览 */
-  async function previewArchive(fileName: string, contentBase64: string): Promise<PluginInstallPreview> {
-    return previewPluginArchive(fileName, contentBase64)
-  }
-
-  /** 快速预览离线包：只读基本信息 */
-  async function previewArchiveBasic(fileName: string, contentBase64: string): Promise<PluginInstallPreview> {
-    return previewPluginArchiveBasic(fileName, contentBase64)
+  /**
+   * 预览一批插件包的安装（市场 / 路径 / 离线包都走这里）。
+   *
+   * 两次调用共用同一批输入：
+   *   - resolveDependencies 为 false 只读清单，用于先把卡片渲染出来；
+   *   - 为 true 才求解依赖闭包并拿到 planId（安装的唯一凭据）。
+   * 由调用方决定何时发起第二次，界面不必等依赖求解完才能显示内容。
+   */
+  async function previewPackages(
+    inputs: PluginPackageInput[],
+    options: { resolveDependencies?: boolean, offline?: boolean } = {},
+  ): Promise<PluginInstallPreview> {
+    return previewPluginPackages(inputs, options)
   }
 
   /**
-   * 批量安装离线包。
+   * 按已确认的安装计划完成安装。
    *
-   * 逐个安装（后端按单个插件包处理依赖与信任），
-   * 全部结束后统一刷新一次，避免 N 个包触发 N 次全量重载。
+   * 计划是一次性的：后端在取出计划时即删除，因此这里只要被调用过
+   * （无论成败），手里的 planId 就已经作废。调用方失败后需要重新预览。
+   *
+   * 安装完成后还要重载前端插件宿主，否则新插件的菜单入口不会出现。
    */
-  async function installArchives(
-    items: Array<{ fileName: string, contentBase64: string }>,
-    trust: boolean,
-    acceptPermissions: boolean,
-  ): Promise<void> {
+  async function installPlan(planId: string, trust: boolean, acceptPermissions: boolean): Promise<void> {
     busy.value = true
     try {
-      for (const item of items) {
-        await installPluginArchive(item.fileName, item.contentBase64, trust, acceptPermissions)
-      }
-      await afterMutation()
-    }
-    finally {
-      busy.value = false
-    }
-  }
-
-  /**
-   * 批量安装（按来源请求，本地路径 / 网络地址 / 市场都走这里）。
-   *
-   * 与 installArchives 同样的取舍：逐个安装、最后统一刷新一次。
-   * 用户一次选中多个插件目录或插件包时，这一步能把 N 次全量重载压成 1 次。
-   */
-  async function installAll(
-    requests: PluginInstallRequest[],
-    trust: boolean,
-    acceptPermissions: boolean,
-  ): Promise<void> {
-    busy.value = true
-    try {
-      for (const req of requests) {
-        await installPlugin({
-          ...req,
-          trust: trust || req.trust,
-          acceptPermissions: acceptPermissions || req.acceptPermissions,
-        })
-      }
-      await afterMutation()
-    }
-    finally {
-      busy.value = false
-    }
-  }
-
-  /**
-   * 执行安装（或升级）。
-   *
-   * 安装完成后需要两件事：刷新后端状态、重新加载前端插件宿主，
-   * 否则新插件的菜单入口不会出现。
-   */
-  async function install(req: PluginInstallRequest): Promise<void> {
-    busy.value = true
-    try {
-      await installPlugin(req)
+      await installPluginPlan(planId, trust, acceptPermissions)
       await afterMutation()
     }
     finally {
@@ -268,12 +268,18 @@ export const usePluginStore = defineStore('plugins', () => {
     }
   }
 
-  /** 启用 / 停用插件 */
-  async function setEnabled(id: string, enabled: boolean): Promise<void> {
+  /**
+   * 启用 / 停用插件。
+   *
+   * cascade 为 true 时，停用被依赖的插件会一并停用依赖方；
+   * 返回本次实际变更（含被级联停用）的插件 id，供界面提示用户。
+   */
+  async function setEnabled(id: string, enabled: boolean, cascade = false): Promise<string[]> {
     busy.value = true
     try {
-      await setPluginEnabled(id, enabled)
+      const affected = await setPluginEnabled(id, enabled, cascade)
       await afterMutation()
+      return affected
     }
     finally {
       busy.value = false
@@ -341,7 +347,7 @@ export const usePluginStore = defineStore('plugins', () => {
   async function init(): Promise<void> {
     await initPluginHost()
     await refreshInstalled()
-    void loadRegistryUrl()
+    void loadSources()
   }
 
   return {
@@ -352,25 +358,26 @@ export const usePluginStore = defineStore('plugins', () => {
     busy,
     checkingUpdates,
     error,
-    registryUrl,
+    sources,
+    marketFilter,
+    previewSourceUrl,
+    sourceSnapshot,
     // getters
     activePlugins,
     updateOf,
     updatableCount,
+    marketItems,
+    marketSources,
     // actions
     init,
     refreshInstalled,
     loadMarketplace,
-    loadRegistryUrl,
-    updateRegistryUrl,
+    loadSources,
+    updateSources,
+    loadSourceSnapshot,
     checkUpdates,
-    preview,
-    previewBasic,
-    previewArchive,
-    previewArchiveBasic,
-    installArchives,
-    installAll,
-    install,
+    previewPackages,
+    installPlan,
     uninstall,
     setEnabled,
     setTrusted,

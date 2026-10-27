@@ -226,22 +226,49 @@ body {
 }
 
 /*
- * 默认右键菜单全局关闭，统一使用自定义右键菜单。
- * 输入框、文本域等需要系统菜单的场景通过 --default-contextmenu: show 单独放开；
- * 该变量由 Wails 内置运行时读取（见 runtime/desktop/contextmenu.js）。
+ * 默认右键菜单全局关闭，统一使用应用自己的右键菜单（复制 / 剪切 / 粘贴，见
+ * utils/editingContextMenu.ts）。该变量由 Wails 内置运行时读取
+ * （见 runtime/desktop/contextmenu.js）。
+ *
+ * 注意：输入框不再单独放开 --default-contextmenu —— 原生菜单在输入框里弹出的
+ * 正是那个要被替换掉的浏览器菜单，改由统一菜单接管。
  */
 :root {
   --default-contextmenu: hide;
 }
 
-/* 允许输入类控件的文本选中与系统右键菜单 */
+/*
+ * 指针语义：能按的给「手」，能输入的给「文本光标」，其余保持系统默认箭头。
+ *
+ * 注意：不要把 cursor 写在 body 上（会覆盖 Wails 边缘缩放用的内联 cursor，
+ * 见上面 body 的注释），所以这里逐类给规则，让其它位置继续用系统默认箭头。
+ */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+[role="switch"]:not([aria-disabled="true"]),
+[role="checkbox"]:not([aria-disabled="true"]),
+[role="tab"],
+[role="menuitem"],
+a[href],
+summary,
+select,
+label[for] {
+  cursor: pointer;
+}
+
+button:disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+/* 允许输入类控件的文本选中；光标用 text 才符合「这里能输入」的直觉 */
 input,
 textarea,
-[contenteditable="true"] {
+[contenteditable="true"],
+.cm-content {
   user-select: text;
   -webkit-user-select: text;
-  cursor: auto;
-  --default-contextmenu: show;
+  cursor: text;
 }
 
 /* 需要复制内容的区域可通过该类开放选中 */

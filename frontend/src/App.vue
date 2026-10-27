@@ -4,6 +4,7 @@ import TitleBar from '@/components/TitleBar.vue'
 import ConfirmHost from '@/components/ui/ConfirmHost.vue'
 import Toaster from '@/components/ui/Toaster.vue'
 import ContextMenu from '@/components/ContextMenu.vue'
+import EditingContextMenu from '@/components/EditingContextMenu.vue'
 import WindowResizeEdges from '@/components/WindowResizeEdges.vue'
 import Workbench from '@/layouts/Workbench.vue'
 import { closeWindow, openDevTools, toggleMaximiseWindow } from '@/api/window'
@@ -124,6 +125,9 @@ onMounted(async () => {
       :items="titleBarMenuItems"
       @select="handleMenuSelect"
     />
+
+    <!-- 全局默认右键菜单：复制 / 剪切 / 粘贴（由 main.ts 的全局监听驱动） -->
+    <EditingContextMenu />
 
     <!--
       全局反馈宿主：各挂一个即可（内部 Teleport 到 body）。

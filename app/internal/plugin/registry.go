@@ -202,6 +202,9 @@ type RegistryProvider struct {
 // DefaultRegistryIndexURL 官方索引的默认地址。
 const DefaultRegistryIndexURL = "https://raw.githubusercontent.com/tuple97/toolbox-plugins/main/registry.json"
 
+// OfficialSourceName 内置官方源的默认展示名。
+const OfficialSourceName = "官方源"
+
 // DefaultRegistryProvider 返回默认索引来源。
 func DefaultRegistryProvider() RegistryProvider {
 	return RegistryProvider{IndexURL: DefaultRegistryIndexURL}
@@ -231,48 +234,70 @@ func NewRegistryClient(provider RegistryProvider) *RegistryClient {
 	}
 }
 
-// Provider 返回索引来源配置。
+// Provider 返回宿主内置的官方索引来源配置。
+//
+// 用户自添加的插件源不在这里 —— 它们由管理器维护成一份列表（见 RegistrySource），
+// 这里的 provider 始终代表「内置官方源」，是验签强度的基准。
 func (c *RegistryClient) Provider() RegistryProvider { return c.provider }
 
-// SetProvider 更新索引来源（用户可在设置中更换镜像）。
-func (c *RegistryClient) SetProvider(p RegistryProvider) { c.provider = p }
-
-// FetchIndex 拉取并校验官方索引。
+// FetchIndexAt 拉取并校验「指定地址」的索引。
 //
 // 返回值 verified 表示签名是否校验通过。
-// 公钥已配置但取不到签名或验签失败时返回错误 —— 绝不把未验签的索引
-// 当成可信索引继续使用。
-func (c *RegistryClient) FetchIndex(ctx context.Context) (*RegistryIndex, bool, error) {
-	if strings.TrimSpace(c.provider.IndexURL) == "" {
-		return nil, false, fmt.Errorf("%w: 未配置插件索引地址", ErrSourceUnavailable)
+// strict 决定验签强度，两者的差别只在「签名缺失」时怎么处理：
+//   - strict=true（内置官方源）：配了公钥就必须验签通过。官方索引突然没签名，
+//     多半是被劫持或发布流水线出问题，宁可失败也不能降级；
+//   - strict=false（用户自设来源）：签名可选。取不到签名按未验签处理
+//     （verified=false，索引里的 official 标记不再被信任，安装时按第三方
+//     来源要求用户显式确认信任）。
+//
+// 无论哪种强度，**签名取到了却验不过都会直接拒绝** —— 那说明内容被篡改
+// 或地址被劫持，不能降级成「未验签」继续使用。
+func (c *RegistryClient) FetchIndexAt(ctx context.Context, indexURL, signatureURL string, strict bool) (*RegistryIndex, bool, error) {
+	target := strings.TrimSpace(indexURL)
+	if target == "" {
+		return nil, false, fmt.Errorf("%w: 插件源地址为空", ErrSourceUnavailable)
 	}
 
-	raw, err := c.fetchBytes(ctx, c.provider.IndexURL, maxIndexBytes)
+	raw, err := c.fetchBytes(ctx, target, maxIndexBytes)
 	if err != nil {
 		// 带上索引地址：404 最常见的成因是「仓库还没建 / 分支还没推送」，
 		// 用户看到具体地址才能自行判断该去哪里修
-		return nil, false, fmt.Errorf("%w: 读取插件索引失败（%s）：%v",
-			ErrSourceUnavailable, c.provider.IndexURL, err)
+		return nil, false, fmt.Errorf("%w: 读取插件源索引失败（%s）：%v",
+			ErrSourceUnavailable, target, err)
 	}
 
 	verified := false
 	if SignatureEnabled() {
-		sig, sigErr := c.fetchSignature(ctx)
-		if sigErr != nil {
+		sig, sigErr := c.fetchSignatureAt(ctx, target, signatureURL)
+		switch {
+		case sigErr != nil && strict:
 			return nil, false, fmt.Errorf("%w: 获取索引签名失败: %v", ErrSourceUnavailable, sigErr)
+		case sigErr == nil:
+			if err := VerifySignature(raw, sig, RegistryPublicKey); err != nil {
+				return nil, false, fmt.Errorf("索引签名校验失败（已拒绝使用该索引）: %w", err)
+			}
+			verified = true
 		}
-		if err := VerifySignature(raw, sig, RegistryPublicKey); err != nil {
-			return nil, false, fmt.Errorf("索引签名校验失败（已拒绝使用该索引）: %w", err)
-		}
-		verified = true
 	}
 
+	index, err := parseIndex(raw)
+	if err != nil {
+		return nil, verified, err
+	}
+	return index, verified, nil
+}
+
+// parseIndex 解析并逐条校验索引内容。
+//
+// 校验规则与来源、验签结果无关：任何来源的索引都要过同样的格式与条目检查，
+// 坏数据不流入后续流程。
+func parseIndex(raw []byte) (*RegistryIndex, error) {
 	var index RegistryIndex
 	if err := json.Unmarshal(raw, &index); err != nil {
-		return nil, verified, fmt.Errorf("解析插件索引失败: %w", err)
+		return nil, fmt.Errorf("解析插件索引失败: %w", err)
 	}
 	if index.SchemaVersion != RegistrySchemaVersion {
-		return nil, verified, fmt.Errorf("不支持的索引格式版本: %d（当前支持 %d）",
+		return nil, fmt.Errorf("不支持的索引格式版本: %d（当前支持 %d）",
 			index.SchemaVersion, RegistrySchemaVersion)
 	}
 
@@ -281,23 +306,24 @@ func (c *RegistryClient) FetchIndex(ctx context.Context) (*RegistryIndex, bool, 
 	for i := range index.Plugins {
 		entry := &index.Plugins[i]
 		if err := entry.Validate(); err != nil {
-			return nil, verified, fmt.Errorf("索引条目 %q 非法: %w", entry.ID, err)
+			return nil, fmt.Errorf("索引条目 %q 非法: %w", entry.ID, err)
 		}
 		key := entry.ID + "@" + entry.Version
 		if _, dup := seen[key]; dup {
-			return nil, verified, fmt.Errorf("索引中存在重复条目: %s", key)
+			return nil, fmt.Errorf("索引中存在重复条目: %s", key)
 		}
 		seen[key] = struct{}{}
 	}
-
-	return &index, verified, nil
+	return &index, nil
 }
 
-// fetchSignature 获取索引的分离式签名。
-func (c *RegistryClient) fetchSignature(ctx context.Context) (string, error) {
-	target := strings.TrimSpace(c.provider.SignatureURL)
+// fetchSignatureAt 获取指定索引地址的分离式签名。
+//
+// signatureURL 为空时按约定取 <indexURL>.sig。
+func (c *RegistryClient) fetchSignatureAt(ctx context.Context, indexURL, signatureURL string) (string, error) {
+	target := strings.TrimSpace(signatureURL)
 	if target == "" {
-		target = c.provider.IndexURL + ".sig"
+		target = indexURL + ".sig"
 	}
 	raw, err := c.fetchBytes(ctx, target, 4096)
 	if err != nil {

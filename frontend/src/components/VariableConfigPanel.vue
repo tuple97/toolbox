@@ -413,6 +413,7 @@ async function testDynamicOptions(config: VariableConfig) {
                   <CodeEditor :model-value="config.dynamicOptions?.sql ?? ''" language="sql" completion-mode="sql"
                     height="160px" :db-type="optionDbType(config)"
                     :completion-context="() => optionSqlContext(config)"
+                    show-format-button
                     @update:model-value="updateDynamicOption(index, config, { sql: $event })" />
                 </div>
 

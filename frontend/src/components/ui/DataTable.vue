@@ -185,6 +185,12 @@ document.addEventListener('keydown', handleEscape)
 onBeforeUnmount(() => document.removeEventListener('keydown', handleEscape))
 
 function onRowContextMenu(row: TRow, index: number, event: MouseEvent) {
+  /*
+   * 行菜单由调用方渲染，这里必须自己吞掉默认菜单：main.ts 的全局监听靠
+   * defaultPrevented 判断「是否有组件已经处理过右键」，不表态就会多弹一层
+   * 默认的复制/剪切/粘贴菜单。
+   */
+  event.preventDefault()
   /* 右键作用范围＝选区；点在选区外时只保留该行 */
   if (props.selectable && !selected.value.includes(index)) {
     selected.value = [index]

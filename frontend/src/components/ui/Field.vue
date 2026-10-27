@@ -15,7 +15,7 @@ defineProps<{
   <div class="flex items-start gap-3 py-2">
     <span
       v-if="label"
-      class="shrink-0 pt-1.5 text-sm text-muted"
+      class="field__label shrink-0 pt-1.5 text-sm text-muted"
       :style="{ width: labelWidth ?? '7rem' }"
     >
       {{ label }}<span v-if="required" class="ml-0.5 text-danger">*</span>

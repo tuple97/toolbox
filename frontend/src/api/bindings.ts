@@ -60,12 +60,10 @@ export const ListSystemFonts = App.ListSystemFonts
 // ---- 插件体系 ----
 export const PluginList = App.PluginList
 export const PluginMarketplace = App.PluginMarketplace
-export const PluginPreviewInstall = App.PluginPreviewInstall
-export const PluginInstall = App.PluginInstall
-export const PluginPreviewArchive = App.PluginPreviewArchive
-export const PluginPreviewArchiveBasic = App.PluginPreviewArchiveBasic
-export const PluginPreviewBasic = App.PluginPreviewBasic
-export const PluginInstallArchive = App.PluginInstallArchive
+// 安装只有「预览一批包」与「按计划提交」两步：在线市场、URL、本地包、
+// 本地目录、批量导入全部复用，否则批量包之间的相互依赖无法在一次求解里处理
+export const PluginPreviewPackages = App.PluginPreviewPackages
+export const PluginInstallPlan = App.PluginInstallPlan
 export const PluginUninstall = App.PluginUninstall
 export const PluginSetEnabled = App.PluginSetEnabled
 export const PluginSetTrusted = App.PluginSetTrusted
@@ -76,8 +74,9 @@ export const PluginReload = App.PluginReload
 export const PluginInvoke = App.PluginInvoke
 export const PluginGetSetting = App.PluginGetSetting
 export const PluginSetSetting = App.PluginSetSetting
-export const PluginRegistryURL = App.PluginRegistryURL
-export const PluginSetRegistryURL = App.PluginSetRegistryURL
+export const PluginListSources = App.PluginListSources
+export const PluginSaveSources = App.PluginSaveSources
+export const PluginSourceMarketplace = App.PluginSourceMarketplace
 export const PluginAssetBase = App.PluginAssetBase
 export const PluginReadAsset = App.PluginReadAsset
 

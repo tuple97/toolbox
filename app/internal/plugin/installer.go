@@ -136,32 +136,52 @@ func (m *Manager) Preview(ctx context.Context, inputs []PackageInput, opts Previ
 		return nil, fmt.Errorf("%w: 离线模式下不能从插件市场安装", ErrSourceUnavailable)
 	}
 
-	var index *RegistryIndex
-	indexVerified := false
+	/*
+	 * 一次安装可能横跨多个来源：根插件来自用户点选的来源，依赖则可能在别的
+	 * 来源里。因此这里把全部已启用来源的索引（命中缓存就不打网络）都取来，
+	 * 交给挑选与求解统一使用 —— 否则「A 源的主包依赖 B 源的依赖」这类组合
+	 * 会在求解阶段莫名其妙地报「依赖缺失」。
+	 */
+	var views []sourceIndexView
 	if needIndex {
-		var err error
-		index, indexVerified, err = m.ensureIndex(ctx, false)
-		if err != nil {
-			return nil, err
+		explicit := make([]string, 0, len(inputs))
+		for _, in := range inputs {
+			if !strings.EqualFold(strings.TrimSpace(in.Source), SourceRegistry) {
+				continue
+			}
+			if url := strings.TrimSpace(in.SourceURL); url != "" && !containsString(explicit, url) {
+				explicit = append(explicit, url)
+			}
 		}
-		if index == nil {
+		var errs map[string]error
+		views, errs = m.ensureSourcesForInstall(ctx, explicit, false)
+		if len(views) == 0 {
+			// 全部来源都失败：把错误按地址排序后取第一条，保证提示稳定可复现
+			urls := make([]string, 0, len(errs))
+			for url := range errs {
+				urls = append(urls, url)
+			}
+			sort.Strings(urls)
+			for _, url := range urls {
+				return nil, errs[url]
+			}
 			return nil, fmt.Errorf("%w: 插件索引不可用", ErrSourceUnavailable)
 		}
 	}
 
-	loaded, err := m.loadInputs(inputs, index)
+	loaded, err := m.loadInputs(inputs, views)
 	if err != nil {
 		return nil, err
 	}
 
 	entry := &planEntry{
-		id:        newToken(8),
-		createdAt: time.Now(),
-		expiresAt: time.Now().Add(planTTL),
-		origins:   make(map[string]Origin),
-		decisions: make(map[string]TrustDecision),
+		id:         newToken(8),
+		createdAt:  time.Now(),
+		expiresAt:  time.Now().Add(planTTL),
+		origins:    make(map[string]Origin),
+		decisions:  make(map[string]TrustDecision),
 		addedPerms: make(map[string][]string),
-		roots:     make(map[string]struct{}),
+		roots:      make(map[string]struct{}),
 	}
 
 	preview := &InstallPreview{
@@ -188,7 +208,7 @@ func (m *Manager) Preview(ctx context.Context, inputs []PackageInput, opts Previ
 		return preview, nil
 	}
 
-	catalog, err := m.buildCatalog(loaded, index, opts.Offline)
+	catalog, err := m.buildCatalog(loaded, views, opts.Offline)
 	if err != nil {
 		return nil, err
 	}
@@ -212,12 +232,13 @@ func (m *Manager) Preview(ctx context.Context, inputs []PackageInput, opts Previ
 		entry.origins[mf.ID] = origin
 
 		item := PlanItem{
-			ID:        mf.ID,
-			Version:   mf.Version,
-			Source:    string(origin.Kind),
-			SourceRef: origin.Ref,
-			Checksum:  NormalizeChecksum(origin.Checksum),
-			Official:  origin.Official,
+			ID:             mf.ID,
+			Version:        mf.Version,
+			Source:         string(origin.Kind),
+			SourceRef:      origin.Ref,
+			Checksum:       NormalizeChecksum(origin.Checksum),
+			Official:       origin.Official,
+			SourceVerified: origin.Verified,
 		}
 		if _, ok := entry.roots[mf.ID]; ok {
 			item.Root = true
@@ -235,7 +256,9 @@ func (m *Manager) Preview(ctx context.Context, inputs []PackageInput, opts Previ
 			item.Action = ActionUpgrade
 		}
 
-		decision := DecideTrust(origin.Official && indexVerified, indexVerified, m.alreadyTrusted(mf.ID, origin.Checksum))
+		// origin.Official 已与来源验签结果取过与；再传一次 Verified 是为了复用
+		// DecideTrust 的判定分支（official 为真时必然已验签，不会落到「声明官方但无法验证」）
+		decision := DecideTrust(origin.Official, origin.Verified, m.alreadyTrusted(mf.ID, origin.Checksum))
 		entry.decisions[mf.ID] = decision
 		item.NeedTrust = decision.NeedPrompt
 		item.TrustReason = decision.Reason
@@ -277,7 +300,7 @@ func (m *Manager) Preview(ctx context.Context, inputs []PackageInput, opts Previ
 	unverified := 0
 	for _, mf := range resolution.Order {
 		origin := entry.origins[mf.ID]
-		if !origin.Official || !indexVerified {
+		if !origin.Official || !origin.Verified {
 			unverified++
 		}
 	}
@@ -585,7 +608,9 @@ func (m *Manager) signatureWarning() []string {
 
 // buildRecord 依据计划项构造新的安装记录。
 func (m *Manager) buildRecord(item PlanItem, mf *Manifest, oldRaw []byte) (*InstallRecord, error) {
-	decision := DecideTrust(item.Official, SignatureEnabled(), m.alreadyTrusted(item.ID, item.Checksum))
+	// 用计划项自带的来源验签状态，而不是全局的 SignatureEnabled()：
+	// 多源下不同来源的验签结果并不相同，拿全局开关当代理会误判第三方源为官方。
+	decision := DecideTrust(item.Official, item.SourceVerified, m.alreadyTrusted(item.ID, item.Checksum))
 
 	rec := &InstallRecord{
 		ID:          item.ID,
@@ -637,10 +662,10 @@ type loadedInput struct {
 }
 
 // loadInputs 读取并校验全部输入包。
-func (m *Manager) loadInputs(inputs []PackageInput, index *RegistryIndex) ([]*loadedInput, error) {
+func (m *Manager) loadInputs(inputs []PackageInput, views []sourceIndexView) ([]*loadedInput, error) {
 	out := make([]*loadedInput, 0, len(inputs))
 	for _, in := range inputs {
-		item, err := m.loadInput(in, index)
+		item, err := m.loadInput(in, views)
 		if err != nil {
 			return nil, err
 		}
@@ -649,29 +674,27 @@ func (m *Manager) loadInputs(inputs []PackageInput, index *RegistryIndex) ([]*lo
 	return out, nil
 }
 
-func (m *Manager) loadInput(in PackageInput, index *RegistryIndex) (*loadedInput, error) {
+func (m *Manager) loadInput(in PackageInput, views []sourceIndexView) (*loadedInput, error) {
 	source := strings.ToLower(strings.TrimSpace(in.Source))
 	switch source {
 	case SourceRegistry:
-		if index == nil {
+		if len(views) == 0 {
 			return nil, fmt.Errorf("%w: 插件索引不可用", ErrSourceUnavailable)
 		}
 		if strings.TrimSpace(in.ID) == "" {
 			return nil, fmt.Errorf("从插件市场安装需要提供插件 id")
 		}
-		entry := index.Find(in.ID, strings.TrimSpace(in.Version))
-		if entry == nil {
-			if in.Version != "" {
-				return nil, fmt.Errorf("插件市场中不存在 %s@%s", in.ID, in.Version)
-			}
-			return nil, fmt.Errorf("插件市场中不存在 %s", in.ID)
+		entry, view, err := pickRegistryEntry(views, in.SourceURL, in.ID, strings.TrimSpace(in.Version))
+		if err != nil {
+			return nil, err
 		}
 		mf := entry.Manifest()
 		origin := Origin{
 			Kind:     KindRegistry,
 			Ref:      entry.Download,
 			Checksum: entry.Checksum,
-			Official: entry.Official,
+			Official: entry.Official && view.Verified,
+			Verified: view.Verified,
 			Priority: originPriorityRoot,
 		}
 		if payload, ok, err := m.store.ReadCache(entry.Checksum); err == nil && ok {
@@ -804,7 +827,7 @@ func (m *Manager) loadLocalDir(in PackageInput) (*loadedInput, error) {
 //
 // 顺序：本地已安装 → 本地包缓存 → 本次提供的包 → 官方索引。
 // 后加入的条目在优先级更高或内容更完整时覆盖前面的同名版本（见 Catalog.Add）。
-func (m *Manager) buildCatalog(loaded []*loadedInput, index *RegistryIndex, offline bool) (*Catalog, error) {
+func (m *Manager) buildCatalog(loaded []*loadedInput, views []sourceIndexView, offline bool) (*Catalog, error) {
 	catalog := NewCatalog()
 
 	// 1. 本地已安装：允许求解复用它，安装时走 keep 分支
@@ -849,24 +872,37 @@ func (m *Manager) buildCatalog(loaded []*loadedInput, index *RegistryIndex, offl
 		}
 	}
 
-	// 4. 官方索引（离线模式下不访问网络，也不使用索引）
-	if index == nil || offline {
+	// 4. 各插件源索引（离线模式下不访问网络，也不使用索引）
+	if len(views) == 0 || offline {
 		return catalog, nil
 	}
-	for i := range index.Plugins {
-		entry := &index.Plugins[i]
-		origin := Origin{
-			Kind:     KindRegistry,
-			Ref:      entry.Download,
-			Checksum: entry.Checksum,
-			Official: entry.Official,
-			Priority: originPriorityRegistry,
-		}
-		if path, ok := m.store.CacheFile(entry.Checksum); ok {
-			origin.CachePath = path
-		}
-		if err := catalog.Add(entry.Manifest(), origin); err != nil {
-			return nil, err
+	for _, view := range views {
+		verified := view.Verified
+		for i := range view.Index.Plugins {
+			entry := &view.Index.Plugins[i]
+			origin := Origin{
+				Kind:     KindRegistry,
+				Ref:      entry.Download,
+				Checksum: entry.Checksum,
+				Official: entry.Official && verified,
+				Verified: verified,
+				Priority: originPriorityRegistry,
+			}
+			if path, ok := m.store.CacheFile(entry.Checksum); ok {
+				origin.CachePath = path
+			}
+			if err := catalog.Add(entry.Manifest(), origin); err != nil {
+				/*
+				 * 同一个 (id, version) 被两个来源提供但摘要不一致。
+				 *
+				 * 这是来源之间的分歧，不是本插件的安装错误：先登记的来源胜出，
+				 * 冲突项跳过。绝不能因为「用户同时挂了两个源」就让整次安装失败，
+				 * 也不该在这里替用户决定谁是对的 —— 实际安装的内容仍按选中来源
+				 * 自己的摘要校验。
+				 */
+				slog.Warn("跳过与其它来源冲突的索引条目",
+					"id", entry.ID, "version", entry.Version, "source", view.Source.URL, "error", err)
+			}
 		}
 	}
 	return catalog, nil

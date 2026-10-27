@@ -527,8 +527,12 @@ export function editorThemeExtensions(themeName: string): Extension[] {
         // 同上：放不下时折行，别让内容消失
         flexWrap: 'wrap',
       },
+      /*
+       * 列类型原先硬编码等宽字体，结果补全列表里只有这一处字体和编辑器不一致。
+       * 改成 inherit：跟着 .cm-tooltip 上设置的编辑器字体走（见 CodeEditor 的 fontExtension）。
+       */
       '.cm-tooltip-autocomplete ul li .cm-column-detail__type': {
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+        fontFamily: 'inherit',
       },
       '.cm-tooltip-autocomplete ul li .cm-column-detail__icon': {
         display: 'inline-flex',

@@ -31,13 +31,19 @@ const (
 // 依赖解析只关心选哪个版本；取得内容由安装器按 Origin 完成。
 // 二者共用同一份 Catalog，保证「解析出来的版本」和「实际安装的包」永远对应。
 type Origin struct {
-	Kind     PackageKind
+	Kind PackageKind
 	// Ref 人类可读来源引用：下载地址 / 本地路径 / 包文件名
 	Ref string
 	// Checksum 期望的 sha256 摘要（registry 来源必填）
 	Checksum string
-	// Official 该条目在官方索引中被标记为官方审核
+	// Official 该条目是否为可信的官方条目
+	// （= 索引声明 official 且该来源的索引验签通过）
 	Official bool
+	// Verified 该条目所在来源的索引是否验签通过
+	//
+	// 与 Official 分开：未验签来源里的 official 声明不可信，但来源本身仍可用，
+	// 只是安装时必须由用户显式确认信任。
+	Verified bool
 	// Payload 已读取到内存的安装包内容（url / file / batch 来源）
 	Payload []byte
 	// Dir 本地目录来源的目录路径

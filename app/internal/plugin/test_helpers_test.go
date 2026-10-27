@@ -63,13 +63,16 @@ func (s *memStorage) List(pluginID string) (map[string]string, error) {
 	return out, nil
 }
 
-// newTestManager 创建使用临时目录的管理器。
+// unreachableRegistryURL 指向一个必然连不上的地址，用作测试里的「内置官方源」。
+const unreachableRegistryURL = "http://127.0.0.1:1/registry.json"
+
+// newTestManager 创建使用临时目录的管理器（官方源不可达）。
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()
-	return newTestManagerWith(t, RegistryProvider{IndexURL: "http://127.0.0.1:1/registry.json"})
+	return newTestManagerWith(t, RegistryProvider{IndexURL: unreachableRegistryURL})
 }
 
-// newTestManagerWith 创建指定索引来源的管理器。
+// newTestManagerWith 创建指定索引来源的管理器（该来源即内置官方源）。
 func newTestManagerWith(t *testing.T, provider RegistryProvider) *Manager {
 	t.Helper()
 	mgr := NewManager(Options{
@@ -83,6 +86,43 @@ func newTestManagerWith(t *testing.T, provider RegistryProvider) *Manager {
 	}
 	t.Cleanup(func() { _ = mgr.Close() })
 	return mgr
+}
+
+// newTestManagerWithSources 创建带指定插件源列表的管理器。
+//
+// 内置官方源固定指向不可达地址，因此列表里的其它来源都会被当作第三方来源。
+func newTestManagerWithSources(t *testing.T, sources ...RegistrySource) *Manager {
+	t.Helper()
+	mgr := NewManager(Options{
+		DataDir:    t.TempDir(),
+		AppVersion: testAppVersion,
+		Registry:   RegistryProvider{IndexURL: unreachableRegistryURL},
+		Sources:    sources,
+		Storage:    newMemStorage(),
+	})
+	if err := mgr.Startup(context.Background()); err != nil {
+		t.Fatalf("初始化插件管理器失败: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+	return mgr
+}
+
+// thirdPartySources 组一个「禁用官方源 + 启用该测试源」的来源列表。
+func thirdPartySources(reg *testRegistry) []RegistrySource {
+	return []RegistrySource{
+		{URL: unreachableRegistryURL, Name: OfficialSourceName, Enabled: false},
+		{URL: reg.provider().IndexURL, Name: "第三方源", Enabled: true},
+	}
+}
+
+// sourceVerifiedOf 返回某来源在快照里的验签状态。
+func sourceVerifiedOf(snapshot MarketplaceSnapshot, url string) bool {
+	for _, src := range snapshot.Sources {
+		if src.URL == url {
+			return src.Verified
+		}
+	}
+	return false
 }
 
 // baseManifest 生成一份合法的清单骨架。

@@ -829,7 +829,7 @@ func TestRegistrySignatureVerification(t *testing.T) {
 
 		mgr := newTestManagerWith(t, reg.provider())
 		snapshot := mgr.Marketplace(context.Background(), true)
-		if snapshot.State != "ready" || !snapshot.Verified {
+		if snapshot.State != "ready" || !sourceVerifiedOf(snapshot, reg.provider().IndexURL) {
 			t.Fatalf("签名索引应校验通过: %+v", snapshot)
 		}
 		if len(snapshot.Items) != 1 {
@@ -917,6 +917,55 @@ func TestRegistrySignatureVerification(t *testing.T) {
 			t.Fatalf("应拒绝不支持的索引版本: %+v", snapshot)
 		}
 	})
+
+	/*
+	 * 以下两组针对「用户自添加的第三方来源」：反过来了 —— 官方源缺签名必须拒绝，
+	 * 而用户自设来源缺少签名要容忍（按未验签处理），但签名存在却验不过仍然要拒绝。
+	 */
+	t.Run("用户来源未提供签名时按未验签处理", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		reg.publish(t, baseManifest("com.toolbox.third", "1.0.0"), nil, true)
+
+		// 宿主配了公钥（签名校验开启），但该来源根本不提供签名
+		previousKey := RegistryPublicKey
+		t.Cleanup(func() { RegistryPublicKey = previousKey })
+		RegistryPublicKey = base64.StdEncoding.EncodeToString(make([]byte, 32))
+
+		mgr := newTestManagerWithSources(t, thirdPartySources(reg)...)
+
+		snapshot := mgr.Marketplace(context.Background(), true)
+		if snapshot.State != "ready" {
+			t.Fatalf("无签名的第三方来源应可读取: %+v", snapshot)
+		}
+		if sourceVerifiedOf(snapshot, reg.provider().IndexURL) {
+			t.Fatal("未提供签名的来源不应被标记为已验签")
+		}
+		if len(snapshot.Items) != 1 {
+			t.Fatalf("索引条目缺失: %+v", snapshot.Items)
+		}
+		if snapshot.Items[0].Official {
+			t.Fatal("未验签索引里的 official 声明不可信，不能展示为官方")
+		}
+	})
+
+	t.Run("用户来源签名校验失败时拒绝", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		reg.publish(t, baseManifest("com.toolbox.third", "1.0.0"), nil, true)
+		reg.enableSigning(t)
+		// 换成另一对密钥的公钥，模拟该来源被劫持 / 内容被篡改
+		otherReg := newTestRegistry(t)
+		otherReg.enableSigning(t)
+
+		mgr := newTestManagerWithSources(t, thirdPartySources(reg)...)
+
+		snapshot := mgr.Marketplace(context.Background(), true)
+		if snapshot.State != "error" {
+			t.Fatalf("签名校验失败的第三方来源必须被拒绝: %+v", snapshot)
+		}
+		if !strings.Contains(snapshot.Error, "签名校验失败") {
+			t.Fatalf("错误信息应说明验签失败: %s", snapshot.Error)
+		}
+	})
 }
 
 // TestPackageInputWireDecoding 前端输入的解码由上层负责，这里验证 base64 形式的往返。
@@ -938,6 +987,124 @@ func TestPackageInputWireDecoding(t *testing.T) {
 	}
 	if preview.Packages[0].ID != mf.ID {
 		t.Fatalf("插件标识不匹配: %+v", preview.Packages[0])
+	}
+}
+
+// TestMultiSourceMarketplace 多源合并展示、单源视图与按源取包。
+func TestMultiSourceMarketplace(t *testing.T) {
+	first := newTestRegistry(t)
+	first.publish(t, baseManifest("com.toolbox.shared", "1.0.0"), nil, true)
+	second := newTestRegistry(t)
+	second.publish(t, baseManifest("com.toolbox.shared", "1.1.0"), nil, true)
+	second.publish(t, baseManifest("com.toolbox.only-second", "1.0.0"), nil, true)
+
+	firstURL := first.provider().IndexURL
+	secondURL := second.provider().IndexURL
+
+	mgr := newTestManagerWithSources(t,
+		RegistrySource{URL: firstURL, Name: "源A", Enabled: true},
+		RegistrySource{URL: secondURL, Name: "源B", Enabled: true},
+	)
+
+	snapshot := mgr.Marketplace(context.Background(), true)
+	if snapshot.State != "ready" {
+		t.Fatalf("两个来源都应读到索引: %+v", snapshot)
+	}
+	if len(snapshot.Sources) != 2 {
+		t.Fatalf("来源状态数量不对: %+v", snapshot.Sources)
+	}
+
+	// 同名插件在多个来源各占一条，并带上各自的来源信息
+	shared := 0
+	bySource := map[string]string{}
+	for _, item := range snapshot.Items {
+		if item.ID != "com.toolbox.shared" {
+			continue
+		}
+		shared++
+		bySource[item.SourceURL] = item.SourceName
+	}
+	if shared != 2 {
+		t.Fatalf("同名插件应在两个来源各占一条，实际 %d 条", shared)
+	}
+	if bySource[firstURL] != "源A" || bySource[secondURL] != "源B" {
+		t.Fatalf("条目未带上来源信息: %+v", bySource)
+	}
+
+	// 不指定来源：跨源取最高版本
+	auto, err := mgr.Preview(context.Background(),
+		[]PackageInput{{Source: SourceRegistry, ID: "com.toolbox.shared"}},
+		PreviewOptions{ResolveDependencies: true})
+	if err != nil {
+		t.Fatalf("跨源预览失败: %v", err)
+	}
+	if auto.Plan[0].Version != "1.1.0" {
+		t.Fatalf("未指定来源时应取最高版本，实际 %s", auto.Plan[0].Version)
+	}
+
+	// 指定来源：精确取该来源的版本（合并列表里用户点的是哪一条就装哪一条）
+	explicit, err := mgr.Preview(context.Background(),
+		[]PackageInput{{Source: SourceRegistry, SourceURL: firstURL, ID: "com.toolbox.shared"}},
+		PreviewOptions{ResolveDependencies: true})
+	if err != nil {
+		t.Fatalf("按来源预览失败: %v", err)
+	}
+	if explicit.Plan[0].Version != "1.0.0" {
+		t.Fatalf("指定来源时应取该来源的版本，实际 %s", explicit.Plan[0].Version)
+	}
+	if err := mgr.InstallPlan(context.Background(), explicit.PlanID, true, true); err != nil {
+		t.Fatalf("按来源安装失败: %v", err)
+	}
+	// SourceRef 记的是下载地址，因此按测试服务的地址判断取包来源
+	if ref := findInfo(t, mgr, "com.toolbox.shared").SourceRef; !strings.HasPrefix(ref, first.server.URL) {
+		t.Fatalf("安装包应来自指定来源 %s，实际 %s", first.server.URL, ref)
+	}
+
+	// 禁用某个来源：它不再参与合并，但仍能单独查看（含插件简略列表）
+	if err := mgr.SetSources([]RegistrySource{
+		{URL: firstURL, Name: "源A", Enabled: true},
+		{URL: secondURL, Name: "源B", Enabled: false},
+	}); err != nil {
+		t.Fatalf("更新来源列表失败: %v", err)
+	}
+	merged := mgr.Marketplace(context.Background(), false)
+	for _, item := range merged.Items {
+		if item.ID == "com.toolbox.only-second" {
+			t.Fatal("已禁用来源的插件不应出现在合并列表里")
+		}
+	}
+	status, items, err := mgr.SourceMarketplace(context.Background(), secondURL, false)
+	if err != nil {
+		t.Fatalf("单独查看来源失败: %v", err)
+	}
+	if status.Enabled {
+		t.Fatalf("来源状态应标明未启用: %+v", status)
+	}
+	if len(items) != 2 {
+		t.Fatalf("单源列表应包含该来源的全部插件，实际 %d 条", len(items))
+	}
+}
+
+// TestSourcesValidation 来源列表的校验与去重。
+func TestSourcesValidation(t *testing.T) {
+	mgr := newTestManager(t)
+
+	if err := mgr.SetSources([]RegistrySource{{URL: "", Enabled: true}}); err == nil {
+		t.Fatal("空地址应被拒绝")
+	}
+	if err := mgr.SetSources([]RegistrySource{{URL: "ftp://example.com/registry.json", Enabled: true}}); err == nil {
+		t.Fatal("不支持的协议应被拒绝")
+	}
+	if err := mgr.SetSources([]RegistrySource{
+		{URL: "https://example.com/registry.json", Enabled: true},
+		{URL: " https://example.com/registry.json ", Enabled: true},
+	}); err == nil {
+		t.Fatal("重复地址应被拒绝")
+	}
+
+	// 校验失败不应改动已有配置
+	if len(mgr.Sources()) != 1 {
+		t.Fatalf("校验失败时来源列表不应被改动: %+v", mgr.Sources())
 	}
 }
 

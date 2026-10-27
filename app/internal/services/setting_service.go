@@ -55,6 +55,9 @@ var defaultSettings = []database.Setting{
 	{Key: "shortcut_config", Type: SettingTypeJSON, Value: "{}"},
 	// 启动后自动检查新版本（true / false，默认开启）
 	{Key: "app_auto_update", Type: SettingTypeBoolean, Value: "true"},
+	// 插件源列表（JSON 数组：[{url, name, enabled}]）。
+	// 空数组表示使用宿主内置的官方源；由插件体系在启动装配阶段读取。
+	{Key: "plugin_sources", Type: SettingTypeString, Value: "[]"},
 }
 
 // SettingService 负责全局配置的读写。

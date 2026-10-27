@@ -70,10 +70,11 @@ func (a *App) PluginPreviewPackages(
 	converted := make([]plugin.PackageInput, 0, len(inputs))
 	for _, in := range inputs {
 		item := plugin.PackageInput{
-			Source:  in.Source,
-			ID:      in.ID,
-			Version: in.Version,
-			Ref:     in.Ref,
+			Source:    in.Source,
+			SourceURL: in.SourceURL,
+			ID:        in.ID,
+			Version:   in.Version,
+			Ref:       in.Ref,
 		}
 		if strings.TrimSpace(in.ContentBase64) != "" {
 			content, decodeErr := decodeArchive(in.ContentBase64)
@@ -283,25 +284,60 @@ func (a *App) PluginClearData(pluginID string) error {
 	return mgr.ClearPluginData(pluginID)
 }
 
-// PluginRegistryURL 返回当前插件索引地址。
-func (a *App) PluginRegistryURL() (string, error) {
-	mgr, err := a.pluginReady()
-	if err != nil {
-		return "", err
-	}
-	return mgr.RegistryURL(), nil
+// PluginSourceSnapshot 单个插件源的快照（设置里按源预览用）。
+type PluginSourceSnapshot struct {
+	// Source 该来源的状态（是否启用、是否验签通过、读取是否失败）
+	Source plugin.MarketplaceSource `json:"source"`
+	// Items 该来源提供的插件条目（同 id 取该来源的最高版本）
+	Items []plugin.MarketplaceItem `json:"items"`
 }
 
-// PluginSetRegistryURL 更换插件索引地址（镜像或私有源）。
+// PluginListSources 返回当前配置的全部插件源。
 //
-// 更换地址不会改变宿主内置的验签公钥：镜像同样需要提供能通过验签的索引，
-// 否则其中的插件与普通第三方来源一样需要用户确认信任。
-func (a *App) PluginSetRegistryURL(url string) error {
+// 返回的列表始终非空：从未配置过时是「只有内置官方源」。
+func (a *App) PluginListSources() ([]plugin.RegistrySource, error) {
+	mgr, err := a.pluginReady()
+	if err != nil {
+		return nil, err
+	}
+	return mgr.Sources(), nil
+}
+
+// PluginSaveSources 整体替换插件源列表（新增 / 删除 / 启停都走这一个入口）。
+//
+// 列表会写入本地 SQLite（app_settings），重启后自动恢复。传空列表会回落到
+// 宿主内置的官方源。
+//
+// 关于验签：内置官方源必须提供能通过验签的索引；用户自添加的来源签名可选，
+// 没有签名按未验签处理（安装时要求用户确认信任），但签名存在却校验失败会被拒绝。
+func (a *App) PluginSaveSources(sources []plugin.RegistrySource) error {
 	mgr, err := a.pluginReady()
 	if err != nil {
 		return err
 	}
-	return mgr.SetRegistryURL(url)
+	// 先落内存：SetSources 负责校验地址，非法数据不进库
+	if err := mgr.SetSources(sources); err != nil {
+		return err
+	}
+	return a.savePluginSources(mgr.Sources())
+}
+
+// PluginSourceMarketplace 返回「单个来源」的插件列表（不看启用状态）。
+//
+// 设置里选中某个源时用它展示该源有哪些插件 —— 被禁用的来源也要能查看，
+// 否则用户没法在启用之前判断它值不值得信任。
+func (a *App) PluginSourceMarketplace(url string, refresh bool) (*PluginSourceSnapshot, error) {
+	mgr, err := a.pluginReady()
+	if err != nil {
+		return nil, err
+	}
+	source, items, err := mgr.SourceMarketplace(context.Background(), url, refresh)
+	snapshot := &PluginSourceSnapshot{Source: source, Items: items}
+	if err != nil {
+		// 读取失败时仍把状态带回去，界面才能展示失败原因并提供重试
+		return snapshot, err
+	}
+	return snapshot, nil
 }
 
 // PluginSignatureEnabled 报告宿主是否配置了官方索引签名公钥。

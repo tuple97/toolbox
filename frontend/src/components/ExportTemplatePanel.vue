@@ -159,7 +159,8 @@ function insertSnippet(snippet: SqlSnippet) {
           <section class="tpl-panel__group">
             <div class="tpl-panel__group-head">
               <div class="tpl-panel__group-title">模板内容</div>
-              <Button variant="secondary" size="sm" @click="snippetVisible = true">
+              <!-- 与模板配置里的「插入模板」同款同尺寸：同一个动作在两个页签里长得一样 -->
+              <Button variant="secondary" @click="snippetVisible = true">
                 <Icon name="plus" />
                 <span>插入模板</span>
               </Button>
@@ -168,7 +169,7 @@ function insertSnippet(snippet: SqlSnippet) {
             <div class="tpl-panel__editor">
               <CodeEditor ref="contentEditorRef" :key="selected.id" v-model="content" language="sql"
                 completion-mode="sql-template" height="220px" :db-type="dbType"
-                :completion-context="completionContext" />
+                :completion-context="completionContext" show-format-button />
             </div>
           </section>
         </div>

@@ -20,7 +20,6 @@ import AppSidebar from '@/components/AppSidebar.vue'
 import ToolPickerDialog from '@/components/ToolPickerDialog.vue'
 import SettingsView from '@/views/SettingsView.vue'
 import PluginManagerView from '@/views/plugins/PluginManagerView.vue'
-import HomeView from '@/views/HomeView.vue'
 import type { ToolType, WorkbenchTab } from '@/types'
 
 const appStore = useAppStore()
@@ -41,7 +40,6 @@ function iconOf(type: string): string {
  * 插件工具是运行期注册的，只能走 plugins/registry 的动态分派。
  */
 const builtinSingletons: Record<string, Component> = {
-  home: HomeView,
   plugins: PluginManagerView,
   settings: SettingsView,
 }
@@ -49,8 +47,8 @@ const builtinSingletons: Record<string, Component> = {
 /**
  * 解析工具类型对应的视图组件。
  *
- * 宿主是「插件运行平台」：除平台自身的三个视图外，一切工具组件都由
- * 插件在运行时注册。查不到返回 undefined，由调用方降级展示
+ * 宿主是「插件运行平台」：除平台自身的两个视图（插件管理 / 设置）外，
+ * 一切工具组件都由插件在运行时注册。查不到返回 undefined，由调用方降级展示
  * （例如插件被卸载后遗留的历史标签）。
  */
 function componentOf(type: string): Component | undefined {
@@ -60,8 +58,8 @@ function componentOf(type: string): Component | undefined {
 /**
  * 单例视图清单：类型 → 组件。
  *
- * 单例工具（首页 / 连接管理 / SQL 模板 / 词典 / 插件管理 / 设置，以及插件
- * 注册的单例工具）不进标签栏，内容区按 `activeSingleton` 展示其中一个；
+ * 单例工具（插件管理 / 设置 / 连接管理 / SQL 模板 / 词典，以及插件注册的
+ * 单例工具）不进标签栏，内容区按 `activeSingleton` 展示其中一个；
  * 它们都不需要 payload，只有「初始化完成」这一件事要上报。
  *
  * 随插件注册表响应式变化：插件注册后无需重启，侧栏入口与视图立即生效。

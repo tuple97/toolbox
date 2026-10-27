@@ -10,11 +10,18 @@ const SAVE_DEBOUNCE_MS = 1000
 /** 新建 Tab 的默认名称前缀 */
 const DEFAULT_TAB_NAME = '新建标签'
 
+/**
+ * 没有标签可展示时的落脚点（应用刚启动、标签全被关掉）。
+ *
+ * 指向插件管理：它是平台自身的入口，比留一片空白更有意义。
+ */
+const DEFAULT_SINGLETON: ToolType = 'plugins'
+
 export const useTabStore = defineStore('tabs', () => {
   /**
    * 标签列表，顺序即为展示顺序。
    *
-   * **只装多例工具**：单例工具（首页 / 连接管理 / SQL 模板 / 词典 / 设置）
+   * **只装多例工具**：单例工具（插件管理 / 设置 / 连接管理 / SQL 模板 / 词典）
    * 不进标签栏，改为内容区的「单例视图」，见 `activeSingleton`。
    */
   const tabs = ref<WorkbenchTab[]>([])
@@ -25,9 +32,9 @@ export const useTabStore = defineStore('tabs', () => {
    *
    * 与 `activeId` **互斥**：内容区同一时刻要么展示某个单例视图、要么展示激活标签，
    * 所以激活标签时会清掉它、打开单例视图时会清掉 activeId。
-   * 默认首页：应用刚启动、标签全关掉时都有落脚点，不留空白。
+   * 默认落到插件管理：应用刚启动、标签全关掉时都有落脚点，不留空白。
    */
-  const activeSingleton = ref<ToolType | null>('home')
+  const activeSingleton = ref<ToolType | null>(DEFAULT_SINGLETON)
   /** 是否已完成首次加载 */
   const loaded = ref(false)
   /** 保存状态，供界面提示 */
@@ -151,8 +158,8 @@ export const useTabStore = defineStore('tabs', () => {
 
       const active = tabs.value.find(tab => tab.isActive)
       activeId.value = active?.id ?? tabs.value[0]?.id ?? null
-      // 没有标签可展示时落到首页单例视图
-      activeSingleton.value = activeId.value === null ? 'home' : null
+      // 没有标签可展示时落到插件管理单例视图
+      activeSingleton.value = activeId.value === null ? DEFAULT_SINGLETON : null
       loaded.value = true
 
       if (multiOnly.length !== list.length) {
@@ -208,9 +215,9 @@ export const useTabStore = defineStore('tabs', () => {
         activeId.value = next.id
       }
       else {
-        // 最后一条标签也关掉了：回到首页单例视图，不留空白内容区
+        // 最后一条标签也关掉了：回到默认单例视图，不留空白内容区
         activeId.value = null
-        activeSingleton.value = 'home'
+        activeSingleton.value = DEFAULT_SINGLETON
       }
     }
     scheduleSave()
@@ -229,8 +236,8 @@ export const useTabStore = defineStore('tabs', () => {
   function closeAll(): void {
     tabs.value = tabs.value.filter(tab => tab.isLocked)
     activeId.value = tabs.value[0]?.id ?? null
-    // 全关之后没有标签可展示，落到首页单例视图
-    activeSingleton.value = activeId.value === null ? 'home' : null
+    // 全关之后没有标签可展示，落到默认单例视图
+    activeSingleton.value = activeId.value === null ? DEFAULT_SINGLETON : null
     scheduleSave()
   }
 

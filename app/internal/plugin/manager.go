@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"toolbox/app/internal/semver"
 )
@@ -32,8 +31,14 @@ type Options struct {
 	DataDir string
 	// AppVersion 宿主版本，用于 engines 兼容性判断
 	AppVersion string
-	// Registry 官方索引来源
+	// Registry 内置官方索引来源
+	//
+	// 它既是验签强度的基准（只有这个地址会被强制要求签名），也是默认插件源。
 	Registry RegistryProvider
+	// Sources 插件源列表（含用户自添加的第三方源与启用状态）
+	//
+	// 为空时退化为「只有内置官方源」。
+	Sources []RegistrySource
 	// Storage 插件私有配置存储
 	Storage Storage
 	// Events 事件出口
@@ -76,11 +81,10 @@ type Manager struct {
 
 	plans *planCache
 
+	// indexMu 保护插件源列表与各来源的索引缓存（网络请求只持有它）。
 	indexMu       sync.Mutex
-	index         *RegistryIndex
-	indexVerified bool
-	indexErr      string
-	indexLoadedAt time.Time
+	sources       []RegistrySource
+	sourceIndexes map[string]*sourceIndex
 }
 
 // NewManager 创建插件管理器。
@@ -91,17 +95,22 @@ func NewManager(opts Options) *Manager {
 	if opts.Registry.IndexURL == "" {
 		opts.Registry = DefaultRegistryProvider()
 	}
+	if len(opts.Sources) == 0 {
+		opts.Sources = []RegistrySource{{URL: opts.Registry.IndexURL, Name: OfficialSourceName, Enabled: true}}
+	}
 	return &Manager{
-		store:     NewStore(opts.DataDir),
-		client:    NewRegistryClient(opts.Registry),
-		opts:      opts,
-		factory:   opts.RuntimeFactory,
-		records:   make(map[string]*InstallRecord),
-		manifests: make(map[string]*Manifest),
-		loaded:    make(map[string]*loaded),
-		blocked:   make(map[string]string),
-		graph:     NewDepGraph(nil),
-		plans:     newPlanCache(),
+		store:         NewStore(opts.DataDir),
+		client:        NewRegistryClient(opts.Registry),
+		opts:          opts,
+		factory:       opts.RuntimeFactory,
+		records:       make(map[string]*InstallRecord),
+		manifests:     make(map[string]*Manifest),
+		loaded:        make(map[string]*loaded),
+		blocked:       make(map[string]string),
+		graph:         NewDepGraph(nil),
+		plans:         newPlanCache(),
+		sources:       opts.Sources,
+		sourceIndexes: make(map[string]*sourceIndex),
 	}
 }
 
