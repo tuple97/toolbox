@@ -33,6 +33,8 @@ type jsRuntime struct {
 	handlers map[string]goja.Callable
 	host     *HostBridge
 	closed   bool
+	// onRequest 本地服务的请求处理器（toolbox.server.onRequest 注册）
+	onRequest goja.Callable
 }
 
 // newJSRuntime 创建空运行时，实际加载在 Start 中完成。
@@ -52,6 +54,9 @@ func (r *jsRuntime) Start(_ context.Context, host *HostBridge, source []byte) er
 		return fmt.Errorf("插件后端入口内容为空")
 	}
 	r.host = host
+	r.onRequest = nil
+	// 本地服务的请求要回到这个运行时里执行，先登记分发函数
+	host.SetLocalHandler(r.serveLocal)
 
 	vm := goja.New()
 	r.vm = vm
@@ -150,13 +155,52 @@ func (r *jsRuntime) Handlers() []string {
 }
 
 // Close 释放运行时。
+//
+// 一并关掉插件自带的本地服务：插件被停用/卸载后端口不能继续被占着。
 func (r *jsRuntime) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.closed = true
 	r.handlers = make(map[string]goja.Callable)
+	r.onRequest = nil
 	r.vm = nil
+	if r.host != nil {
+		r.host.StopLocalServer()
+	}
 	return nil
+}
+
+// serveLocal 把本地服务收到的一条请求交给插件 JS 处理。
+//
+// 与 handler 调用共用同一把锁：goja 运行时不能并发使用，
+// 因此本地请求会和前端调用排队执行（这类服务的流量本来就很小）。
+func (r *jsRuntime) serveLocal(req LocalRequest) (LocalResponse, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.closed || r.vm == nil || r.onRequest == nil {
+		return LocalResponse{Status: 503, Body: `{"error":"插件未注册请求处理器"}`}, nil
+	}
+
+	stop := watchDog(r.vm, jsCallTimeout, "插件处理本地请求超时")
+	value, err := r.onRequest(goja.Undefined(), toJSONValue(r.vm, req))
+	stop()
+	if err != nil {
+		return LocalResponse{}, fmt.Errorf("插件处理请求失败: %w", err)
+	}
+	if value == nil || goja.IsUndefined(value) || goja.IsNull(value) {
+		return LocalResponse{Status: 204}, nil
+	}
+
+	encoded, err := json.Marshal(value.Export())
+	if err != nil {
+		return LocalResponse{}, fmt.Errorf("插件返回的响应无法序列化: %w", err)
+	}
+	var resp LocalResponse
+	if err := json.Unmarshal(encoded, &resp); err != nil {
+		return LocalResponse{}, fmt.Errorf("插件返回的响应字段非法: %w", err)
+	}
+	return resp, nil
 }
 
 // injectAPI 把 toolbox 全局对象注入运行时作用域。
@@ -297,6 +341,81 @@ func (r *jsRuntime) injectAPI(vm *goja.Runtime) error {
 	})
 	_ = toolbox.Set("plugins", plugins)
 
+	// 本地服务（只绑回环，端口受清单权限约束）
+	server := vm.NewObject()
+	_ = server.Set("onRequest", func(call goja.FunctionCall) goja.Value {
+		fn, ok := goja.AssertFunction(call.Argument(0))
+		if !ok {
+			panic(vm.NewTypeError("toolbox.server.onRequest 需要一个函数"))
+		}
+		r.onRequest = fn
+		return goja.Undefined()
+	})
+	_ = server.Set("start", func(call goja.FunctionCall) goja.Value {
+		port := 0
+		if arg := call.Argument(0); arg != nil && !goja.IsUndefined(arg) && !goja.IsNull(arg) {
+			port = int(arg.ToInteger())
+		}
+		actual, err := r.host.StartLocalServer(port)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		result := vm.NewObject()
+		_ = result.Set("port", actual)
+		return result
+	})
+	_ = server.Set("stop", func(goja.FunctionCall) goja.Value {
+		r.host.StopLocalServer()
+		return goja.Undefined()
+	})
+	_ = server.Set("status", func(goja.FunctionCall) goja.Value {
+		running, port := r.host.LocalServerStatus()
+		result := vm.NewObject()
+		_ = result.Set("running", running)
+		_ = result.Set("port", port)
+		return result
+	})
+	_ = server.Set("logs", func(call goja.FunctionCall) goja.Value {
+		var since int64
+		if arg := call.Argument(0); arg != nil {
+			if obj, ok := arg.(*goja.Object); ok {
+				if v := obj.Get("since"); v != nil && !goja.IsUndefined(v) && !goja.IsNull(v) {
+					since = v.ToInteger()
+				}
+			}
+		}
+		return toJSONValue(vm, r.host.LocalServerLogs(since))
+	})
+	_ = toolbox.Set("server", server)
+
+	// 签名（只暴露「用私钥签一段数据」，不做通用加解密）
+	crypto := vm.NewObject()
+	_ = crypto.Set("sign", func(call goja.FunctionCall) goja.Value {
+		arg := call.Argument(0)
+		if arg == nil || goja.IsUndefined(arg) || goja.IsNull(arg) {
+			panic(vm.NewTypeError("toolbox.crypto.sign 需要一个参数对象"))
+		}
+		var params struct {
+			Algorithm string `json:"algorithm"`
+			Key       string `json:"key"`
+			Data      string `json:"data"`
+			Encoding  string `json:"encoding"`
+		}
+		encoded, err := json.Marshal(arg.Export())
+		if err != nil {
+			panic(vm.NewGoError(fmt.Errorf("参数无法序列化: %w", err)))
+		}
+		if err := json.Unmarshal(encoded, &params); err != nil {
+			panic(vm.NewTypeError("参数字段非法: " + err.Error()))
+		}
+		output, err := SignWithPrivateKey(params.Algorithm, params.Key, params.Data, params.Encoding)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return vm.ToValue(output)
+	})
+	_ = toolbox.Set("crypto", crypto)
+
 	// MCP 工具运行时注册（P3 阶段消费；先收集，未启用时不影响插件）
 	mcp := vm.NewObject()
 	_ = mcp.Set("registerTool", func(call goja.FunctionCall) goja.Value {
@@ -338,6 +457,22 @@ func watchDog(vm *goja.Runtime, d time.Duration, message string) func() {
 		// 清除中断标记，否则后续调用会立刻抛错
 		vm.ClearInterrupt()
 	}
+}
+
+// toJSONValue 把 Go 值转成按 json tag 命名的 JS 值。
+//
+// 直接 vm.ToValue 会暴露 Go 的字段名（Method / Path…），插件里就得写
+// req.Method 这种大小写混杂的访问方式；走一遍 JSON 后与清单/文档一致。
+func toJSONValue(vm *goja.Runtime, value any) goja.Value {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return goja.Undefined()
+	}
+	var generic any
+	if err := json.Unmarshal(encoded, &generic); err != nil {
+		return goja.Undefined()
+	}
+	return vm.ToValue(generic)
 }
 
 // exportJSString 把 goja 值转成可读字符串。

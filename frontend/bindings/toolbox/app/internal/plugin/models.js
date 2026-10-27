@@ -1469,6 +1469,17 @@ export class RegistrySource {
              */
             this["enabled"] = false;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * Official 是否为宿主内置的官方源。
+             * 
+             * 由管理器按地址判定，不来自配置：它是验签强度的基准，也是界面上
+             * 唯一不可删除的来源。持久化里即使写了这个字段也会被重新计算。
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["official"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }

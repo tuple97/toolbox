@@ -10,6 +10,7 @@ import Slider from '@/components/ui/Slider.vue'
 import Switch from '@/components/ui/Switch.vue'
 import Tag from '@/components/ui/Tag.vue'
 import { fetchSystemFonts } from '@/api/fonts'
+import { openExternalUrl } from '@/api/plugins'
 import { useConfigStore } from '@/stores/configStore'
 import { useLogStore } from '@/stores/logStore'
 import { useMetadataStore } from '@/stores/metadataStore'
@@ -345,7 +346,7 @@ async function addPluginSource(): Promise<void> {
   try {
     await pluginStore.updateSources([
       ...pluginSources.value,
-      { url, name: newSourceName.value.trim(), enabled: true },
+      { url, name: newSourceName.value.trim(), enabled: true, official: false },
     ])
     newSourceUrl.value = ''
     newSourceName.value = ''
@@ -384,6 +385,16 @@ async function togglePluginSource(source: PluginRegistrySource, enabled: boolean
 /** 选中某个来源：右侧预览它提供哪些插件 */
 function pickPluginSource(source: PluginRegistrySource): void {
   void pluginStore.loadSourceSnapshot(source.url)
+}
+
+/** 在系统浏览器里打开来源的索引地址 */
+async function openSourceLink(source: PluginRegistrySource): Promise<void> {
+  try {
+    await openExternalUrl(source.url)
+  }
+  catch (e) {
+    notify.error(e instanceof Error ? e.message : String(e))
+  }
 }
 
 /** 强制刷新选中来源的插件列表 */
@@ -666,10 +677,29 @@ onBeforeUnmount(() => {
                   :title="source.url"
                   @click="pickPluginSource(source)"
                 >
-                  <span class="plugin-sources__name">{{ source.name || source.url }}</span>
+                  <span class="plugin-sources__name">
+                    <span class="plugin-sources__label">{{ source.name || source.url }}</span>
+                    <!-- 官方源随宿主内置，没有删除入口；标一下免得找不到按钮 -->
+                    <Tag v-if="source.official" tone="brand" effect="plain" size="sm">内置</Tag>
+                  </span>
                   <span class="plugin-sources__url">{{ source.url }}</span>
                 </button>
-                <Button variant="ghost" size="sm" @click="removePluginSource(source)">删除</Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  title="在浏览器中打开索引地址"
+                  @click="openSourceLink(source)"
+                >
+                  <Icon name="link" />
+                </Button>
+                <Button
+                  v-if="!source.official"
+                  variant="ghost"
+                  size="sm"
+                  @click="removePluginSource(source)"
+                >
+                  删除
+                </Button>
               </li>
               <li v-if="pluginSources.length === 0" class="plugin-sources__empty">
                 未配置时使用内置官方源。
@@ -950,11 +980,20 @@ onBeforeUnmount(() => {
   color: var(--brand-color);
 }
 
+/* 名称行：名称可截断，「内置」标记始终可见 */
 .plugin-sources__name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+  font-size: var(--app-font-size-sm);
+}
+
+.plugin-sources__label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--app-font-size-sm);
 }
 
 .plugin-sources__url {

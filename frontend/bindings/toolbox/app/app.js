@@ -369,6 +369,18 @@ export function NotifyBeforeQuit() {
 }
 
 /**
+ * OpenExternalURL 用系统默认浏览器打开一个链接。
+ * 
+ * 只放行 http/https：这个入口会直接把字符串交给系统处理，
+ * 不做协议白名单的话前端一旦拼错参数就会变成「打开任意程序」。
+ * @param {string} url
+ * @returns {$CancellablePromise<void>}
+ */
+export function OpenExternalURL(url) {
+    return $Call.ByID(2161014307, url);
+}
+
+/**
  * PluginAssetBase 返回插件前端资源的 URL 前缀。
  * 
  * 前端据此拼出插件 ESM 入口：<base><id>/<version>/frontend/index.js
@@ -486,6 +498,18 @@ export function PluginMarketplace(refresh) {
     return $Call.ByID(3960100065, refresh).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType37($result);
     }));
+}
+
+/**
+ * PluginOpenFolder 用系统文件管理器打开插件当前版本的安装目录。
+ * 
+ * 目录里是解包后的清单、前端产物与后端脚本 —— 「查看文件」用它，
+ * 比让用户自己去数据目录里翻要直接得多。
+ * @param {string} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function PluginOpenFolder(id) {
+    return $Call.ByID(2482755950, id);
 }
 
 /**

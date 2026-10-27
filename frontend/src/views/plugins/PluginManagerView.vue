@@ -23,7 +23,7 @@ import MultiSelect from '@/components/ui/MultiSelect.vue'
 import Switch from '@/components/ui/Switch.vue'
 import Tag from '@/components/ui/Tag.vue'
 import { pickDirectories, pickFiles } from '@/api/dialog'
-import { readFileAsBase64 } from '@/api/plugins'
+import { openPluginFolder, readFileAsBase64 } from '@/api/plugins'
 import { pluginLoadError } from '@/plugins/loader'
 import { usePluginStore } from '@/stores/pluginStore'
 import { useTabStore } from '@/stores/tabStore'
@@ -360,6 +360,10 @@ const menuItems = computed<ContextMenuAction[]>(() => {
       disabled: !hasSettingsOf(plugin),
     },
     {
+      key: 'open-folder',
+      label: '查看文件',
+    },
+    {
       key: 'uninstall',
       label: '卸载',
       danger: true,
@@ -398,6 +402,9 @@ function handleMenuSelect(item: ContextMenuAction): void {
       break
     case 'settings':
       openSettings(plugin)
+      break
+    case 'open-folder':
+      void handleOpenFolder(plugin)
       break
     case 'uninstall':
       void handleUninstall(plugin)
@@ -725,6 +732,21 @@ async function handleReload(): Promise<void> {
   try {
     await store.reload()
     notify.success('插件已重新加载')
+  }
+  catch (e) {
+    notify.error(e instanceof Error ? e.message : String(e))
+  }
+}
+
+/**
+ * 用系统文件管理器打开插件的安装目录。
+ *
+ * 目录里是解包后的清单、前端产物与后端脚本：排查「插件加载失败」
+ * 或改插件里的前端资源时，比自己去数据目录里翻要直接。
+ */
+async function handleOpenFolder(plugin: InstalledPlugin): Promise<void> {
+  try {
+    await openPluginFolder(plugin.id)
   }
   catch (e) {
     notify.error(e instanceof Error ? e.message : String(e))

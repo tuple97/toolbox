@@ -7,6 +7,7 @@
  */
 
 import {
+  OpenExternalURL,
   PluginAssetBase,
   PluginCheckUpdates,
   PluginGetSetting,
@@ -15,6 +16,7 @@ import {
   PluginList,
   PluginListSources,
   PluginMarketplace,
+  PluginOpenFolder,
   PluginPreviewPackages,
   PluginReadAsset,
   PluginReload,
@@ -326,7 +328,7 @@ export async function fetchMarketplace(refresh = false): Promise<PluginMarketpla
   }
 }
 
-/** 读取插件源列表 */
+/** 读取插件源列表（首项恒为内置官方源） */
 export async function fetchPluginSources(): Promise<PluginRegistrySource[]> {
   const raw = (await PluginListSources()) as unknown
   if (!Array.isArray(raw)) {
@@ -338,17 +340,34 @@ export async function fetchPluginSources(): Promise<PluginRegistrySource[]> {
       url: str(item.url),
       name: str(item.name),
       enabled: bool(item.enabled),
+      official: bool(item.official),
     }
   })
 }
 
-/** 整体保存插件源列表 */
+/**
+ * 整体保存插件源列表。
+ *
+ * official 只是绑定模型的必填位：后端按地址重新判定、并且落库前会清掉，
+ * 传什么都不会被当成「可配置的信任标记」。内置官方源即使被漏传也会被补回。
+ */
 export async function savePluginSources(sources: PluginRegistrySource[]): Promise<void> {
   await PluginSaveSources(sources.map(source => ({
     url: source.url,
     name: source.name,
     enabled: source.enabled,
+    official: false,
   })))
+}
+
+/** 用系统默认浏览器打开链接（后端只放行 http/https） */
+export function openExternalUrl(url: string): Promise<void> {
+  return OpenExternalURL(url)
+}
+
+/** 打开插件当前版本的安装目录（系统文件管理器） */
+export function openPluginFolder(id: string): Promise<void> {
+  return PluginOpenFolder(id)
 }
 
 /**

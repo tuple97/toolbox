@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -91,6 +92,73 @@ type HostBridge struct {
 	// trace 当前执行栈的追踪（由运行时在每次执行前设置），
 	// 用于让嵌套的跨插件调用能识别「自己已经在本栈中」
 	trace atomic.Pointer[CallTrace]
+
+	// serverMu 保护插件自带的本地服务
+	serverMu    sync.Mutex
+	localServer *LocalServer
+}
+
+// SetLocalHandler 由运行时注入「本地服务请求 → 插件 JS」的分发函数。
+//
+// 在运行时启动时调用：此时才知道由谁处理请求。服务本身仍是懒创建的，
+// 插件不调用 toolbox.server.start 就不会占用任何端口。
+func (h *HostBridge) SetLocalHandler(fn func(LocalRequest) (LocalResponse, error)) {
+	h.serverMu.Lock()
+	defer h.serverMu.Unlock()
+	if h.localServer == nil {
+		h.localServer = NewLocalServer(h.id, fn)
+	}
+}
+
+// StartLocalServer 启动插件自带的本地 HTTP 服务，返回实际端口。
+func (h *HostBridge) StartLocalServer(port int) (int, error) {
+	if !h.perms.Server.Enabled {
+		return 0, fmt.Errorf("%w: 启动本地服务（未声明 permissions.server）", ErrPermissionDenied)
+	}
+	if !h.perms.Server.AllowsPort(port) {
+		return 0, fmt.Errorf("%w: 本地服务端口 %d 未在清单 permissions.server.ports 中声明",
+			ErrPermissionDenied, port)
+	}
+
+	h.serverMu.Lock()
+	srv := h.localServer
+	h.serverMu.Unlock()
+	if srv == nil {
+		return 0, fmt.Errorf("插件运行时尚未就绪，无法启动本地服务")
+	}
+	return srv.Start(port)
+}
+
+// StopLocalServer 关闭本地服务（未启动时是空操作）。
+func (h *HostBridge) StopLocalServer() {
+	h.serverMu.Lock()
+	srv := h.localServer
+	h.serverMu.Unlock()
+	if srv != nil {
+		srv.Stop()
+	}
+}
+
+// LocalServerStatus 报告本地服务是否在监听及端口。
+func (h *HostBridge) LocalServerStatus() (bool, int) {
+	h.serverMu.Lock()
+	srv := h.localServer
+	h.serverMu.Unlock()
+	if srv == nil {
+		return false, 0
+	}
+	return srv.Status()
+}
+
+// LocalServerLogs 返回 id 大于 since 的访问日志。
+func (h *HostBridge) LocalServerLogs(since int64) []ServerLogEntry {
+	h.serverMu.Lock()
+	srv := h.localServer
+	h.serverMu.Unlock()
+	if srv == nil {
+		return nil
+	}
+	return srv.Logs(since)
 }
 
 // setCallTrace 由运行时在每次执行前后设置当前调用栈追踪。

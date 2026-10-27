@@ -707,6 +707,12 @@ export interface PluginRegistrySource {
   url: string
   name: string
   enabled: boolean
+  /**
+   * 是否为宿主内置的官方源。
+   *
+   * 由后端按地址判定，不可通过配置修改；界面上它不可删除。
+   */
+  official: boolean
 }
 
 /** 单个插件源在某次读取中的状态 */

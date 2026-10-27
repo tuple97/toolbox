@@ -102,9 +102,15 @@ func loadPluginSources(repo *database.Repository) []plugin.RegistrySource {
 }
 
 // savePluginSources 把插件源列表写入本地配置（SQLite）。
+//
+// Official 是每次读取时按地址重新算出来的，不落库：写进去只会让人误以为
+// 那个标记可以被配置改掉。
 func (a *App) savePluginSources(sources []plugin.RegistrySource) error {
 	if a.settings == nil {
 		return nil
+	}
+	for i := range sources {
+		sources[i].Official = false
 	}
 	raw, err := json.Marshal(sources)
 	if err != nil {

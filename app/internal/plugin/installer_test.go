@@ -1010,8 +1010,12 @@ func TestMultiSourceMarketplace(t *testing.T) {
 	if snapshot.State != "ready" {
 		t.Fatalf("两个来源都应读到索引: %+v", snapshot)
 	}
-	if len(snapshot.Sources) != 2 {
+	// 内置官方源随宿主提供，永远占一条（这里指向不可达地址，因此是 error）
+	if len(snapshot.Sources) != 3 {
 		t.Fatalf("来源状态数量不对: %+v", snapshot.Sources)
+	}
+	if official := snapshot.Sources[0]; !official.Official || official.State != "error" {
+		t.Fatalf("首位应是内置官方源: %+v", official)
 	}
 
 	// 同名插件在多个来源各占一条，并带上各自的来源信息
@@ -1105,6 +1109,18 @@ func TestSourcesValidation(t *testing.T) {
 	// 校验失败不应改动已有配置
 	if len(mgr.Sources()) != 1 {
 		t.Fatalf("校验失败时来源列表不应被改动: %+v", mgr.Sources())
+	}
+
+	// 内置官方源不可删除：传进来的列表里没有它，也会被补回首位并标记为内置
+	if err := mgr.SetSources([]RegistrySource{{URL: "https://example.com/registry.json", Enabled: true}}); err != nil {
+		t.Fatalf("更新来源失败: %v", err)
+	}
+	sources := mgr.Sources()
+	if len(sources) != 2 {
+		t.Fatalf("官方源应被自动补回: %+v", sources)
+	}
+	if official := sources[0]; !official.Official || official.URL != unreachableRegistryURL {
+		t.Fatalf("官方源应在首位且标记为内置: %+v", official)
 	}
 }
 

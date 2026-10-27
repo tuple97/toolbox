@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"toolbox/app/internal/plugin"
@@ -118,6 +119,26 @@ func (a *App) PluginReadAsset(id string, version string, path string) (string, e
 		return "", err
 	}
 	return mgr.ReadAssetText(id, version, path)
+}
+
+// PluginOpenFolder 用系统文件管理器打开插件当前版本的安装目录。
+//
+// 目录里是解包后的清单、前端产物与后端脚本 —— 「查看文件」用它，
+// 比让用户自己去数据目录里翻要直接得多。
+func (a *App) PluginOpenFolder(id string) error {
+	mgr, err := a.pluginReady()
+	if err != nil {
+		return err
+	}
+	dir, err := mgr.PluginDir(id)
+	if err != nil {
+		return err
+	}
+	// 目录可能被用户手动删掉：先确认存在，否则系统会弹一个看不懂的报错
+	if info, statErr := os.Stat(dir); statErr != nil || !info.IsDir() {
+		return fmt.Errorf("插件目录不存在: %s", dir)
+	}
+	return openWithDefaultApp(dir)
 }
 
 // PluginList 返回全部已安装插件的完整信息。

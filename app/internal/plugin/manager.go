@@ -95,10 +95,7 @@ func NewManager(opts Options) *Manager {
 	if opts.Registry.IndexURL == "" {
 		opts.Registry = DefaultRegistryProvider()
 	}
-	if len(opts.Sources) == 0 {
-		opts.Sources = []RegistrySource{{URL: opts.Registry.IndexURL, Name: OfficialSourceName, Enabled: true}}
-	}
-	return &Manager{
+	m := &Manager{
 		store:         NewStore(opts.DataDir),
 		client:        NewRegistryClient(opts.Registry),
 		opts:          opts,
@@ -112,10 +109,26 @@ func NewManager(opts Options) *Manager {
 		sources:       opts.Sources,
 		sourceIndexes: make(map[string]*sourceIndex),
 	}
+	// 内置官方源随宿主提供，不可删除：缺了就补上
+	m.sources = m.withOfficialSource(m.sources)
+	return m
 }
 
 // Store 返回底层插件仓库。
 func (m *Manager) Store() *Store { return m.store }
+
+// PluginDir 返回插件当前版本的实际安装目录。
+//
+// 里面就是解包后的清单、前端产物与后端脚本，「查看文件」直接打开它。
+func (m *Manager) PluginDir(id string) (string, error) {
+	m.mu.RLock()
+	rec := m.records[id]
+	m.mu.RUnlock()
+	if rec == nil {
+		return "", fmt.Errorf("%w: %s", ErrNotInstalled, id)
+	}
+	return m.store.VersionDir(rec.ID, rec.Version), nil
+}
 
 // Startup 执行启动流程：恢复遗留事务 → 扫描磁盘 → 计算有效状态并加载。
 //

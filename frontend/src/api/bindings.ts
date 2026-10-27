@@ -57,6 +57,9 @@ export const SaveSetting = App.SaveSetting
 // ---- 窗口控制 ----
 export const ListSystemFonts = App.ListSystemFonts
 
+// ---- 系统 ----
+export const OpenExternalURL = App.OpenExternalURL
+
 // ---- 插件体系 ----
 export const PluginList = App.PluginList
 export const PluginMarketplace = App.PluginMarketplace
@@ -79,6 +82,7 @@ export const PluginSaveSources = App.PluginSaveSources
 export const PluginSourceMarketplace = App.PluginSourceMarketplace
 export const PluginAssetBase = App.PluginAssetBase
 export const PluginReadAsset = App.PluginReadAsset
+export const PluginOpenFolder = App.PluginOpenFolder
 
 // ---- 应用信息 ----
 export const GetAppInfo = App.GetAppInfo

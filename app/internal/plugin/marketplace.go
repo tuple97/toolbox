@@ -40,21 +40,32 @@ type sourceIndexView struct {
 // ---------------------------------------------------------------- 来源列表
 
 // Sources 返回当前配置的插件源（含被禁用的）。
+//
+// 每一项都会带上「是否官方内置」的判定：官方源是宿主自带的信任基准，
+// 界面据此隐藏删除入口。
 func (m *Manager) Sources() []RegistrySource {
 	m.indexMu.Lock()
 	defer m.indexMu.Unlock()
-	return append([]RegistrySource(nil), m.sources...)
+	out := make([]RegistrySource, 0, len(m.sources))
+	for _, src := range m.sources {
+		src.Official = m.isOfficialURL(src.URL)
+		out = append(out, src)
+	}
+	return out
 }
 
 // SetSources 整体替换插件源列表。
 //
 // 只做校验与缓存维护：保留仍在列表里的来源的索引缓存（单纯切换启用状态
 // 不该白拉一次网络），丢弃已被移除的来源。
+//
+// 内置官方源会由 withOfficialSource 补回：它不可删除。
 func (m *Manager) SetSources(sources []RegistrySource) error {
 	normalized, err := NormalizeSources(sources)
 	if err != nil {
 		return err
 	}
+	normalized = m.withOfficialSource(normalized)
 
 	m.indexMu.Lock()
 	defer m.indexMu.Unlock()
@@ -103,7 +114,48 @@ func NormalizeSources(sources []RegistrySource) ([]RegistrySource, error) {
 //
 // 官方源是验签强度的基准：只有它会在「配了公钥却没有签名」时直接拒绝。
 func (m *Manager) isOfficialURL(url string) bool {
-	return strings.TrimSpace(url) == strings.TrimSpace(m.client.Provider().IndexURL)
+	return strings.EqualFold(strings.TrimSpace(url), strings.TrimSpace(m.client.Provider().IndexURL))
+}
+
+// withOfficialSource 保证内置官方源始终在列表里，且只出现一次。
+//
+// 官方源随宿主内置，界面上不提供删除入口；这里再兜一层，
+// 历史配置或外部调用传进来的列表同样以它打底。
+func (m *Manager) withOfficialSource(sources []RegistrySource) []RegistrySource {
+	officialURL := strings.TrimSpace(m.client.Provider().IndexURL)
+	out := make([]RegistrySource, 0, len(sources)+1)
+	found := false
+	for _, src := range sources {
+		if !strings.EqualFold(strings.TrimSpace(src.URL), officialURL) {
+			out = append(out, src)
+			continue
+		}
+		if found {
+			// 重复出现的官方源只保留第一条
+			continue
+		}
+		found = true
+		name := strings.TrimSpace(src.Name)
+		if name == "" {
+			name = OfficialSourceName
+		}
+		out = append(out, RegistrySource{
+			URL:      officialURL,
+			Name:     name,
+			Enabled:  src.Enabled,
+			Official: true,
+		})
+	}
+	if !found {
+		// 缺了就补在最前面：官方源是默认那一档，不该排到用户自建源后面
+		out = append([]RegistrySource{{
+			URL:      officialURL,
+			Name:     OfficialSourceName,
+			Enabled:  true,
+			Official: true,
+		}}, out...)
+	}
+	return out
 }
 
 // sourceName 返回来源的展示名，未命名时回落到地址。

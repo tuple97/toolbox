@@ -26,6 +26,7 @@ const (
 //   - network：HTTP 请求域名白名单（含重定向逐跳校验）
 //   - db：工具箱数据库访问
 //   - events：应用事件总线
+//   - server：本地 HTTP 服务（仅回环地址 + 端口白名单）
 type Permissions struct {
 	// Network HTTP 请求域名白名单；支持通配前缀（*.example.com）
 	Network []string `json:"network,omitempty"`
@@ -35,11 +36,43 @@ type Permissions struct {
 	DB []string `json:"db,omitempty"`
 	// Events 是否允许收发应用事件总线
 	Events bool `json:"events,omitempty"`
+	// Server 是否允许插件启动本地 HTTP 服务（只绑回环地址）
+	Server ServerPermission `json:"server,omitempty"`
+}
+
+// ServerPermission 本地服务能力。
+//
+// 只允许监听 127.0.0.1：这类服务的用途是「给本机其它程序用」
+// （例如 IDE 的激活服务），对外开放既没必要，也不该由插件单方面决定。
+type ServerPermission struct {
+	// Enabled 是否允许启动本地服务
+	Enabled bool `json:"enabled,omitempty"`
+	// Ports 允许监听的端口白名单；留空表示 1024-65535 内任意端口
+	Ports []int `json:"ports,omitempty"`
+}
+
+// AllowsPort 报告某个端口是否在授权范围内；port 为 0 表示由系统分配。
+func (p ServerPermission) AllowsPort(port int) bool {
+	if !p.Enabled {
+		return false
+	}
+	if port == 0 {
+		return true
+	}
+	if len(p.Ports) == 0 {
+		return port >= 1024 && port <= 65535
+	}
+	for _, allowed := range p.Ports {
+		if allowed == port {
+			return true
+		}
+	}
+	return false
 }
 
 // IsZero 报告是否未申请任何权限。
 func (p Permissions) IsZero() bool {
-	return len(p.Network) == 0 && !p.Storage && len(p.DB) == 0 && !p.Events
+	return len(p.Network) == 0 && !p.Storage && len(p.DB) == 0 && !p.Events && !p.Server.Enabled
 }
 
 // Validate 校验权限声明合法性。
@@ -68,6 +101,20 @@ func (p Permissions) Validate() error {
 			return fmt.Errorf("数据库权限重复声明: %q", cap)
 		}
 		seen[normalized] = struct{}{}
+	}
+
+	seenPort := make(map[int]struct{}, len(p.Server.Ports))
+	for _, port := range p.Server.Ports {
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("本地服务端口非法（1-65535）: %d", port)
+		}
+		if _, dup := seenPort[port]; dup {
+			return fmt.Errorf("本地服务端口重复声明: %d", port)
+		}
+		seenPort[port] = struct{}{}
+	}
+	if len(p.Server.Ports) > 0 && !p.Server.Enabled {
+		return fmt.Errorf("声明了本地服务端口，但没有开启 server 权限")
 	}
 	return nil
 }
@@ -179,6 +226,17 @@ func (p Permissions) PermissionSummary() []string {
 	}
 	if p.Events {
 		items = append(items, "收发应用事件")
+	}
+	if p.Server.Enabled {
+		if len(p.Server.Ports) > 0 {
+			ports := make([]string, 0, len(p.Server.Ports))
+			for _, port := range p.Server.Ports {
+				ports = append(ports, fmt.Sprintf("%d", port))
+			}
+			items = append(items, fmt.Sprintf("监听本地端口：%s", strings.Join(ports, "、")))
+		} else {
+			items = append(items, "监听本地端口（仅回环地址）")
+		}
 	}
 	sort.Strings(items)
 	return items
