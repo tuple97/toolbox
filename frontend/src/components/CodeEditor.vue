@@ -142,13 +142,7 @@ const props = withDefaults(defineProps<{
   showStatementFrames?: boolean
   /** 是否显示行号左侧的「执行这条语句」按钮（仅 sql 语言） */
   showRunButtons?: boolean
-  /**
-   * 是否显示右上角的「格式化」按钮（仅 sql 语言）。
-   *
-   * 命令执行窗口自带一整条工具条，模板配置里的编辑器没有，于是同一套编辑器
-   * 「有的能格式化、有的不能」。这里把能力做进编辑器本身，需要的场景直接打开，
-   * 不必各自再拼一个工具条。
-   */
+  /** 是否显示右上角的「格式化」按钮（仅 sql 语言） */
   showFormatButton?: boolean
   /** 页面注入的动态补全上下文（覆盖实例级登记值，每次查询重新求值） */
   completionContext?: () => Partial<CompletionRuntime> | undefined
@@ -989,24 +983,12 @@ function baseExtensions(): Extension[] {
     EditorView.lineWrapping,
     // 查找 / 替换 + 选中词同名高亮 + 官方快捷键（见 utils/editorSearch.ts）
     ...editorSearchExtensions(),
-    /*
-     * tabindex 必须显式给：CM6 在只读（editable=false）时会把 .cm-content 设成
-     * contentEditable="false"，浏览器就不会因为点击而聚焦它 —— 于是按键（Ctrl+A 全选、
-     * Ctrl+C 复制）落不到编辑器上，只有鼠标划选能用（那是 CM 自己实现的）。
-     * 加上 tabindex 后只读编辑器也能获得焦点，CM 自带的 Mod-a / 复制与我们的快捷键才生效。
-     */
+    /* tabindex 必须显式给：CM6 在只读（editable=false）时会把 .cm-content 设成 con */
     EditorView.contentAttributes.of({ spellcheck: 'false', tabindex: '0' }),
     // 补全快捷键由 autocompletion 自己以 Prec.highest 注册（见 completionExtension），
     // 这里不要再重复绑定 completionKeymap；只补一个它没有的「空格勾选列名」
     keymap.of([
-      /*
-       * 回车 / Tab 先走「片段占位跳转」：插入片段后，片段里的变量与空位置排成一条链，
-       * 依次跳过去，走完自动释放；没有占位、光标不在占位上、或开关关掉时返回 false，
-       * 回车落回换行、Tab 落回缩进。
-       *
-       * 必须排在 defaultKeymap 之前，否则回车会被 insertNewlineAndIndent 吃掉。
-       * 补全打开时回车仍归补全（CM 以 Prec.highest 注册它的键位）。
-       */
+      /* 回车 / Tab 先走「片段占位跳转」：插入片段后，片段里的变量与空位置排成一条链， 依次跳过去，走完自动释放 */
       { key: 'Enter', run: jumpTemplatePlaceholder },
       { key: 'Tab', run: jumpTemplatePlaceholder },
       ...closeBracketsKeymap,
@@ -1173,11 +1155,7 @@ function insertTemplateText(text: string): boolean {
   }
 }
 
-/**
- * 标记 / 清除编辑器里的错误（底部红色波浪线）
- * @param positions 错误位置（行号从 1 起）；传空数组即清空
- * @param options.reveal 是否滚动到第一个错误并聚焦
- */
+/** 标记 / 清除编辑器里的错误（底部红色波浪线） @param positions 错误位置（行号从 1 起） */
 function setErrors(positions: ErrorPosition[], options: { reveal?: boolean } = {}): void {
   const view = viewRef.value
   if (!view) {
@@ -1207,12 +1185,7 @@ interface FormatRange {
   text: string
 }
 
-/**
- * 当前该格式化的范围：有选中就是选中，否则是光标所在的那条 SQL。
- *
- * 与命令执行窗口同一套口径（statementAtCursor）—— 同一个「格式化」动作，
- * 在查询页和模板配置里必须作用到同一段文本，否则用户按同样的键会得到不同结果。
- */
+/** 当前该格式化的范围：有选中就是选中，否则是光标所在的那条 SQL */
 function formatRangeOf(view: EditorView): FormatRange | null {
   const selection = view.state.selection.main
   if (!selection.empty) {
@@ -1223,12 +1196,7 @@ function formatRangeOf(view: EditorView): FormatRange | null {
   return range ? { from: range.from, to: range.to, text: range.sql } : null
 }
 
-/**
- * 格式化光标处（或选中的）SQL；@returns 是否真的改动了文本。
- *
- * 美化与压缩合成一个动作，方向按当前形态自动切换：范围已经写成多行就压缩，
- * 否则展开。写 SQL 的自然节奏就是「先写一行 → 展开看清楚 → 再压回去」。
- */
+/** 格式化光标处（或选中的）SQL；@returns 是否真的改动了文本 */
 function formatSqlAtCursor(): boolean {
   const view = viewRef.value
   if (!view) {
@@ -1302,12 +1270,7 @@ defineExpose({
   overflow: hidden;
 }
 
-/*
- * 只在使用右上角格式化按钮时多出来的定位容器。
- *
- * 用 flex 而不是绝对定位套编辑器：调用方常给 height="100%"，多一层就必须让
- * 高度链继续传下去，否则编辑器会塌成 0 高。
- */
+/* 只在使用右上角格式化按钮时多出来的定位容器 */
 .code-editor-frame {
   position: relative;
   display: flex;

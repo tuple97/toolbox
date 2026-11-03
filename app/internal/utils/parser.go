@@ -38,7 +38,7 @@ var (
 	fieldRefPattern = regexp.MustCompile(`\.([A-Za-z_][A-Za-z0-9_]*)`)
 )
 
-// PreprocessPlaceholders 把用户书写的 {{ var }} 转换为 text/template 需要的 {{ .var }}。
+// PreprocessPlaceholders 把用户书写的 {{ var }} 转换为 text/template 需要
 //
 // 处理范围（用户无需书点点号）：
 //   - 纯变量：{{ device_no }}        → {{ .device_no }}

@@ -1,12 +1,5 @@
 <script setup lang="ts">
-/**
- * 标签（替代 `el-tag`）。
- *
- * 沿用 EP 的两个概念，迁移时只改属性名：
- *  - `tone`（EP 叫 `type`）：文案语气，决定颜色，取自应用语义色（含新的 success / warning）；
- *  - `effect`：`light` 是带淡底的实心标签（列表里的状态用），
- *    `plain` 是只有描边的空标签（列表右侧的「生产 / 只读」这种标记用，视觉更轻）。
- */
+/** 标签（替代 `el-tag`） */
 import { computed } from 'vue'
 import { cn } from '@/lib/utils'
 

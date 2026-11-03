@@ -9,24 +9,13 @@ import (
 
 // 数据库访问权限取值。
 const (
-	// DBPermRead 允许读取工具箱数据库（只读查询）
+	// DBPermRead 读取工具箱数据库
 	DBPermRead = "read"
-	// DBPermWrite 允许写入工具箱数据库
+	// DBPermWrite 写入工具箱数据库
 	DBPermWrite = "write"
 )
 
 // Permissions 插件申请的权限集合。
-//
-// 设计原则：**协议里只保留宿主真正强制执行的能力**。
-// 每一项都必须能在 HostBridge（后端）或前端宿主 API 中找到对应的检查点，
-// 否则不允许留在协议里冒充安全机制。
-//
-// 当前已强制执行的权限：
-//   - storage：插件私有键值存储
-//   - network：HTTP 请求域名白名单（含重定向逐跳校验）
-//   - db：工具箱数据库访问
-//   - events：应用事件总线
-//   - server：本地 HTTP 服务（仅回环地址 + 端口白名单）
 type Permissions struct {
 	// Network HTTP 请求域名白名单；支持通配前缀（*.example.com）
 	Network []string `json:"network,omitempty"`
@@ -38,12 +27,13 @@ type Permissions struct {
 	Events bool `json:"events,omitempty"`
 	// Server 是否允许插件启动本地 HTTP 服务（只绑回环地址）
 	Server ServerPermission `json:"server,omitempty"`
+	// Files 允许读取的本地目录白名单（只读文本）。
+	Files []string `json:"files,omitempty"`
+	// FileWrite 是否允许写入用户在保存对话框里选定的文件。
+	FileWrite bool `json:"fileWrite,omitempty"`
 }
 
 // ServerPermission 本地服务能力。
-//
-// 只允许监听 127.0.0.1：这类服务的用途是「给本机其它程序用」
-// （例如 IDE 的激活服务），对外开放既没必要，也不该由插件单方面决定。
 type ServerPermission struct {
 	// Enabled 是否允许启动本地服务
 	Enabled bool `json:"enabled,omitempty"`
@@ -72,7 +62,8 @@ func (p ServerPermission) AllowsPort(port int) bool {
 
 // IsZero 报告是否未申请任何权限。
 func (p Permissions) IsZero() bool {
-	return len(p.Network) == 0 && !p.Storage && len(p.DB) == 0 && !p.Events && !p.Server.Enabled
+	return len(p.Network) == 0 && !p.Storage && len(p.DB) == 0 && !p.Events &&
+		!p.Server.Enabled && !p.FileWrite && len(p.Files) == 0
 }
 
 // Validate 校验权限声明合法性。
@@ -134,9 +125,6 @@ func (p Permissions) AllowsDB(capability string) bool {
 }
 
 // AllowsURL 报告目标地址是否落在网络白名单内。
-//
-// 规则：仅允许 http/https；主机名与白名单条目精确相等，
-// 或匹配 *.example.com 形式的子域通配。
 func (p Permissions) AllowsURL(raw string) bool {
 	if len(p.Network) == 0 {
 		return false
@@ -168,7 +156,7 @@ func hostMatches(pattern, host string) bool {
 	}
 	if strings.HasPrefix(pattern, "*.") {
 		suffix := pattern[1:] // ".example.com"
-		// 通配必须匹配至少一级子域：a.example.com 命中，example.com 不命中
+		// 通配需匹配至少一级子域
 		return strings.HasSuffix(host, suffix) && len(host) > len(suffix)
 	}
 	return pattern == host
@@ -238,13 +226,17 @@ func (p Permissions) PermissionSummary() []string {
 			items = append(items, "监听本地端口（仅回环地址）")
 		}
 	}
+	if len(p.Files) > 0 {
+		items = append(items, fmt.Sprintf("读取本地文件：%s", strings.Join(p.Files, "、")))
+	}
+	if p.FileWrite {
+		items = append(items, "写入本地文件（由用户在保存对话框中选择位置）")
+	}
 	sort.Strings(items)
 	return items
 }
 
-// PermissionDiff 计算从 old 到 next 新增的权限（升级时用于要求重新确认）。
-//
-// 返回空切片表示权限未扩张，可以静默升级。
+// PermissionDiff 计算从 old 到 next 新增的权限（升级时用于重新确认）。
 func PermissionDiff(old, next Permissions) []string {
 	added := make([]string, 0, 4)
 
@@ -269,6 +261,19 @@ func PermissionDiff(old, next Permissions) []string {
 	if next.Events && !old.Events {
 		added = append(added, "新增：收发应用事件")
 	}
+	if next.FileWrite && !old.FileWrite {
+		added = append(added, "新增：写入用户选择的本地文件")
+	}
+	// 白名单只增不减才算扩张
+	filesBefore := make(map[string]struct{}, len(old.Files))
+	for _, dir := range old.Files {
+		filesBefore[expandPath(dir)] = struct{}{}
+	}
+	for _, dir := range next.Files {
+		if _, ok := filesBefore[expandPath(dir)]; !ok {
+			added = append(added, fmt.Sprintf("新增本地文件目录：%s", dir))
+		}
+	}
 
 	sort.Strings(added)
 	return added
@@ -277,7 +282,7 @@ func PermissionDiff(old, next Permissions) []string {
 // PermissionsEqual 报告两份权限声明是否完全一致（忽略大小写与空白差异）。
 func PermissionsEqual(a, b Permissions) bool {
 	return len(PermissionDiff(a, b)) == 0 && len(PermissionDiff(b, a)) == 0 &&
-		a.Storage == b.Storage && a.Events == b.Events
+		a.Storage == b.Storage && a.Events == b.Events && a.FileWrite == b.FileWrite
 }
 
 func sortedStringsFold(list []string) []string {

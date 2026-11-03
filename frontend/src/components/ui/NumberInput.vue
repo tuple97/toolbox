@@ -1,15 +1,5 @@
 <script setup lang="ts">
-/**
- * 数字输入（替代 `el-input-number`）。
- *
- * 对应 EP 的 `controls-position="right"`：右侧竖排两个步进按钮 —— 竖排比横排窄，
- * 表单里一列数字字段不会把标签挤到换行。
- *
- * 取值规则（与 EP 一致的、也是用户预期的那几条）：
- *  - 输入过程中不强制夹取（否则想从 `1` 改成 `100` 时，中间态会被反复改写成 `1`）；
- *  - 失焦 / 回车时才夹到 [min, max] 并回写；
- *  - 输入不合法（空 / 非数字）时恢复成上一个有效值，而不是塞个 NaN 进去。
- */
+/** 数字输入（替代 `el-input-number`） */
 import { computed, ref, watch } from 'vue'
 import { cn } from '@/lib/utils'
 import Icon from '@/components/ui/Icon.vue'

@@ -1,21 +1,16 @@
-/**
- * 插件状态中心。
- *
- * 承担三件事：
- *   1. 缓存已安装插件列表与市场快照，供插件管理页展示；
- *   2. 封装安装 / 卸载 / 启停 / 信任 / 升级等动作，并在动作后同步刷新；
- *   3. 驱动前端插件宿主的加载（安装或启停后重新加载插件贡献点）。
- */
+/** 插件状态中心：缓存插件与市场数据、封装插件动作并驱动前端宿主加载 */
 
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import {
   checkPluginUpdates,
+  fetchDeveloperMode,
   fetchMarketplace,
   fetchPluginSources,
   fetchPlugins,
   fetchSourceMarketplace,
   installPlan as installPluginPlan,
+  setDeveloperMode as setPluginDeveloperMode,
   previewPackages as previewPluginPackages,
   reloadPlugins,
   rollbackPlugin,
@@ -38,12 +33,7 @@ import type {
   PluginUpdateInfo,
 } from '@/types'
 
-/**
- * 自动检查更新的冷却时间。
- *
- * 装 / 卸 / 升级 / 启停之后都会自动查一次更新，而这一步要拉完整的网络索引，
- * 连点几下就会串行拉好几轮。冷却期内直接跳过，手动点「检查更新」不受限制。
- */
+/** 自动检查更新的冷却时间，避免动作后连续串行拉取索引 */
 const UPDATE_CHECK_COOLDOWN_MS = 30_000
 
 /** 空的市场快照常量，避免模板中到处判空 */
@@ -64,23 +54,17 @@ export const usePluginStore = defineStore('plugins', () => {
   const updates = ref<PluginUpdateInfo[]>([])
   /** 正在执行耗时动作（安装 / 卸载 / 升级 / 刷新） */
   const busy = ref(false)
-  /**
-   * 正在检查更新。
-   *
-   * 单独一位，不并进 busy：检查更新要拉网络索引（最长 12s，网络不通就耗满超时），
-   * 并进 busy 会让插件管理页上所有绑了 busy 的按钮跟着一起转圈，看起来像卡死。
-   */
+  /** 正在检查更新；单列一位，不并进 busy */
   const checkingUpdates = ref(false)
   /** 最近一次失败原因 */
   const error = ref('')
   /** 插件源列表（设置里管理） */
   const sources = ref<PluginRegistrySource[]>([])
-  /**
-   * 市场页的来源过滤（多选）。
-   *
-   * 空数组表示不过滤，即合并展示全部已启用来源；选了若干个就只看这几个。
-   */
+  /** 市场页的来源过滤（多选）；空数组表示不过滤 */
   const marketFilter = ref<string[]>([])
+
+  /** 开发者模式镜像；权威状态在后端（它才真正拦截源码目录安装） */
+  const developerMode = ref(false)
   /** 设置里预览的插件源地址 */
   const previewSourceUrl = ref('')
   /** 设置里预览到的插件简略列表 */
@@ -103,12 +87,7 @@ export const usePluginStore = defineStore('plugins', () => {
   /** 存在更新的插件数量 */
   const updatableCount = computed(() => updates.value.length)
 
-  /**
-   * 市场页当前要展示的条目。
-   *
-   * 没选来源时不作过滤（合并全部已启用来源）；选了若干个就只保留它们的条目。
-   * 同名插件在多个来源各占一条，因此这里过滤的是「来源」而不是「插件」。
-   */
+  /** 市场页当前展示的条目（按选中的来源过滤） */
   const marketItems = computed<PluginMarketplaceItem[]>(() => {
     const items = marketplace.value.items
     if (marketFilter.value.length === 0) {
@@ -120,6 +99,11 @@ export const usePluginStore = defineStore('plugins', () => {
 
   /** 市场页来源下拉的选项（含被禁用的，便于用户看出自己挂过哪些源） */
   const marketSources = computed<PluginMarketplaceSource[]>(() => marketplace.value.sources)
+
+  /** 可作为过滤条件的来源：只列已启用的 */
+  const enabledMarketSources = computed<PluginMarketplaceSource[]>(
+    () => marketSources.value.filter(source => source.enabled),
+  )
 
   /** 刷新已安装插件列表 */
   async function refreshInstalled(): Promise<void> {
@@ -160,17 +144,13 @@ export const usePluginStore = defineStore('plugins', () => {
     }
   }
 
-  /**
-   * 整体保存插件源列表（新增 / 删除 / 启停都走这里）。
-   *
-   * 保存后立刻重拉市场：来源变了，合并列表必然要跟着变。
-   */
+  /** 整体保存插件源列表，保存后重拉市场 */
   async function updateSources(next: PluginRegistrySource[]): Promise<void> {
     await savePluginSources(next)
     await loadSources()
 
-    // 被删掉的来源不能继续当过滤条件，否则市场会一直空着
-    const remaining = new Set(next.map(source => source.url))
+    // 被删掉或被停用的来源不能继续当过滤条件，否则市场会一直空着
+    const remaining = new Set(next.filter(source => source.enabled).map(source => source.url))
     marketFilter.value = marketFilter.value.filter(url => remaining.has(url))
     if (previewSourceUrl.value && !next.some(source => source.url === previewSourceUrl.value)) {
       previewSourceUrl.value = ''
@@ -216,14 +196,7 @@ export const usePluginStore = defineStore('plugins', () => {
     }
   }
 
-  /**
-   * 预览一批插件包的安装（市场 / 路径 / 离线包都走这里）。
-   *
-   * 两次调用共用同一批输入：
-   *   - resolveDependencies 为 false 只读清单，用于先把卡片渲染出来；
-   *   - 为 true 才求解依赖闭包并拿到 planId（安装的唯一凭据）。
-   * 由调用方决定何时发起第二次，界面不必等依赖求解完才能显示内容。
-   */
+  /** 预览一批插件包的安装，返回安装预览 */
   async function previewPackages(
     inputs: PluginPackageInput[],
     options: { resolveDependencies?: boolean, offline?: boolean } = {},
@@ -231,14 +204,7 @@ export const usePluginStore = defineStore('plugins', () => {
     return previewPluginPackages(inputs, options)
   }
 
-  /**
-   * 按已确认的安装计划完成安装。
-   *
-   * 计划是一次性的：后端在取出计划时即删除，因此这里只要被调用过
-   * （无论成败），手里的 planId 就已经作废。调用方失败后需要重新预览。
-   *
-   * 安装完成后还要重载前端插件宿主，否则新插件的菜单入口不会出现。
-   */
+  /** 按已确认的安装计划完成安装，并重载前端宿主 */
   async function installPlan(planId: string, trust: boolean, acceptPermissions: boolean): Promise<void> {
     busy.value = true
     try {
@@ -250,12 +216,7 @@ export const usePluginStore = defineStore('plugins', () => {
     }
   }
 
-  /**
-   * 卸载插件。
-   *
-   * force 为 true 时后端会先停用依赖它的插件（含传递依赖）再卸载，
-   * 返回值即被停用的插件 id；force 为 false 时被依赖会被后端拒绝。
-   */
+  /** 卸载插件；force 为 true 时先停用依赖它的插件并返回这些 id */
   async function uninstall(id: string, force = false): Promise<string[]> {
     busy.value = true
     try {
@@ -268,12 +229,7 @@ export const usePluginStore = defineStore('plugins', () => {
     }
   }
 
-  /**
-   * 启用 / 停用插件。
-   *
-   * cascade 为 true 时，停用被依赖的插件会一并停用依赖方；
-   * 返回本次实际变更（含被级联停用）的插件 id，供界面提示用户。
-   */
+  /** 启用 / 停用插件；cascade 为 true 时级联停用依赖方，返回实际变更的 id */
   async function setEnabled(id: string, enabled: boolean, cascade = false): Promise<string[]> {
     busy.value = true
     try {
@@ -335,6 +291,23 @@ export const usePluginStore = defineStore('plugins', () => {
   }
 
   /** 动作完成后的统一收尾：刷新后端状态 + 重载前端宿主 */
+  /** 读取开发者模式（权威状态在后端，这里只做镜像） */
+  async function loadDeveloperMode(): Promise<void> {
+    try {
+      developerMode.value = await fetchDeveloperMode()
+    }
+    catch {
+      // 读不到就按关闭处理：这个开关放宽的是安装校验，不能猜成开启
+      developerMode.value = false
+    }
+  }
+
+  /** 开关开发者模式（后端负责落库与即时生效） */
+  async function updateDeveloperMode(enabled: boolean): Promise<void> {
+    await setPluginDeveloperMode(enabled)
+    developerMode.value = enabled
+  }
+
   async function afterMutation(): Promise<void> {
     await refreshInstalled()
     await reloadPluginHost()
@@ -348,6 +321,7 @@ export const usePluginStore = defineStore('plugins', () => {
     await initPluginHost()
     await refreshInstalled()
     void loadSources()
+    void loadDeveloperMode()
   }
 
   return {
@@ -360,6 +334,8 @@ export const usePluginStore = defineStore('plugins', () => {
     error,
     sources,
     marketFilter,
+    enabledMarketSources,
+    developerMode,
     previewSourceUrl,
     sourceSnapshot,
     // getters
@@ -378,6 +354,8 @@ export const usePluginStore = defineStore('plugins', () => {
     checkUpdates,
     previewPackages,
     installPlan,
+    loadDeveloperMode,
+    updateDeveloperMode,
     uninstall,
     setEnabled,
     setTrusted,

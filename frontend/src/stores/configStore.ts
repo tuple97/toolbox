@@ -1,13 +1,13 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { fetchSettings, persistSetting } from '@/api/settings'
-import { DEFAULT_FONT, composeFontStack } from '@/utils/fonts'
+import { DEFAULT_FONT, composeEditorFontStack, composeUiFontStack } from '@/utils/fonts'
 import type { ControlSize, SettingKey, ThemeMode } from '@/types'
 
 /** 防抖保存间隔 */
 const SAVE_DEBOUNCE_MS = 400
 
-/** 主题缓存键，index.html 内联脚本首帧据此应用主题 */
+/** 主题缓存键，index.html 首帧据此应用主题 */
 const APP_THEME_STORAGE_KEY = 'toolbox-theme'
 
 /** 配置项默认值，与后端 defaultSettings 保持一致 */
@@ -19,7 +19,7 @@ const DEFAULTS: Record<SettingKey, string> = {
   control_size: 'default',
   editor_font_size: '13',
   log_max_lines: '200',
-  // 字体分中英两档：英文字体吃拉丁与符号，中文字体只负责中文字形
+  // 字体分中英两档
   font_family: DEFAULT_FONT,
   font_family_zh: DEFAULT_FONT,
   editor_font_family: DEFAULT_FONT,
@@ -56,7 +56,7 @@ export const useConfigStore = defineStore('config', () => {
     return Math.min(Math.max(raw, 60), 200) / 100
   })
 
-  /** 控件大小（历史配置项，仅为兼容旧数据） */
+  /** 控件大小（兼容旧配置） */
   const controlSize = computed<ControlSize>(() => {
     const size = values.value.control_size
     return size === 'large' || size === 'small' ? size : 'default'
@@ -71,9 +71,9 @@ export const useConfigStore = defineStore('config', () => {
   /** 编辑器中文字体标识 */
   const editorFontFamilyZh = computed(() => values.value.editor_font_family_zh || DEFAULT_FONT)
 
-  /** 编辑器字体栈（英文在前，中文兜底） */
+  /** 编辑器字体栈（等宽） */
   const editorFontStack = computed(() =>
-    composeFontStack(editorFontFamily.value, editorFontFamilyZh.value))
+    composeEditorFontStack(editorFontFamily.value, editorFontFamilyZh.value))
 
   const logMaxLines = computed(() => toNumber(values.value.log_max_lines, 200))
 
@@ -83,9 +83,9 @@ export const useConfigStore = defineStore('config', () => {
   /** 界面中文字体标识 */
   const fontFamilyZh = computed(() => values.value.font_family_zh || DEFAULT_FONT)
 
-  /** 界面字体栈（英文在前，中文兜底） */
+  /** 界面字体栈（默认系统字体） */
   const fontFamilyStack = computed(() =>
-    composeFontStack(fontFamily.value, fontFamilyZh.value))
+    composeUiFontStack(fontFamily.value, fontFamilyZh.value))
 
   function get(key: SettingKey): string {
     return values.value[key] ?? DEFAULTS[key]
@@ -144,7 +144,7 @@ export const useConfigStore = defineStore('config', () => {
         break
       case 'editor_font_family':
       case 'editor_font_family_zh':
-        // 编辑器字体通过 CSS 变量传给 CodeMirror，无需动 DOM
+        // 编辑器字体通过 CSS 变量传给 CodeMirror
         break
       default:
         break
@@ -183,7 +183,7 @@ export const useConfigStore = defineStore('config', () => {
 
   // ------------------------------------------------------------ 应用外观
 
-  /** 应用主题：`.dark` 类区分明暗，`data-theme` 指定具体配色 */
+  /** 应用主题：`.dark` 类区分明暗，`data-theme` 指定配色 */
   function applyTheme() {
     const root = document.documentElement
     const isDark = theme.value !== 'light'

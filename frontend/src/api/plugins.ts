@@ -1,15 +1,10 @@
-/**
- * 插件体系的后端调用封装。
- *
- * 与其它 api/*.ts 一致：这一层负责把后端返回值规整成前端类型
- * （后端 JSON 里缺字段会是 undefined，这里统一兜底），
- * 让上层组件与 store 不必到处判空。
- */
+/** 插件体系的后端调用封装（把后端返回值规整成前端类型） */
 
 import {
   OpenExternalURL,
   PluginAssetBase,
   PluginCheckUpdates,
+  PluginDeveloperMode,
   PluginGetSetting,
   PluginInstallPlan,
   PluginInvoke,
@@ -22,6 +17,7 @@ import {
   PluginReload,
   PluginRollback,
   PluginSaveSources,
+  PluginSetDeveloperMode,
   PluginSetEnabled,
   PluginSetSetting,
   PluginSetTrusted,
@@ -345,12 +341,7 @@ export async function fetchPluginSources(): Promise<PluginRegistrySource[]> {
   })
 }
 
-/**
- * 整体保存插件源列表。
- *
- * official 只是绑定模型的必填位：后端按地址重新判定、并且落库前会清掉，
- * 传什么都不会被当成「可配置的信任标记」。内置官方源即使被漏传也会被补回。
- */
+/** 整体保存插件源列表 */
 export async function savePluginSources(sources: PluginRegistrySource[]): Promise<void> {
   await PluginSaveSources(sources.map(source => ({
     url: source.url,
@@ -370,11 +361,17 @@ export function openPluginFolder(id: string): Promise<void> {
   return PluginOpenFolder(id)
 }
 
-/**
- * 读取「单个来源」的插件列表（不看启用状态）。
- *
- * 后端在读取失败时仍会返回来源状态，界面据此展示失败原因并把 error 抛出。
- */
+/** 读取开发者模式开关 */
+export function fetchDeveloperMode(): Promise<boolean> {
+  return PluginDeveloperMode()
+}
+
+/** 开关开发者模式（允许源码目录安装并跳过信任确认） */
+export function setDeveloperMode(enabled: boolean): Promise<void> {
+  return PluginSetDeveloperMode(enabled)
+}
+
+/** 读取单个来源的插件列表（不看启用状态） */
 export async function fetchSourceMarketplace(
   url: string,
   refresh = false,
@@ -387,13 +384,7 @@ export async function fetchSourceMarketplace(
   }
 }
 
-/**
- * 把前端输入转成后端绑定期望的形状。
- *
- * 后端 PackageInputWire 里的可选字段在 Wails 生成的类型中是必填的
- * （生成器不解析 omitempty），统一在这里补空串，
- * 免得每个调用点各自做类型断言。
- */
+/** 把前端输入转成后端期望的形状（可选字段统一补空串） */
 function toBackendInput(input: PluginPackageInput) {
   return {
     source: input.source,
@@ -406,15 +397,7 @@ function toBackendInput(input: PluginPackageInput) {
   }
 }
 
-/**
- * 预览一批插件包的安装。
- *
- * resolveDependencies 为 false 时只读清单（本地读取，毫秒级），
- * 用于先把卡片渲染出来；为 true 时求解完整依赖闭包并生成安装计划
- * （可能访问插件源），返回的 planId 是提交安装的唯一凭据。
- *
- * 整批一次性求解，因此同一批里互相依赖的包能在同一次求解里处理。
- */
+/** 预览一批插件包的安装；planId 是提交安装的唯一凭据 */
 export async function previewPackages(
   inputs: PluginPackageInput[],
   options: { resolveDependencies?: boolean, offline?: boolean } = {},
@@ -427,22 +410,12 @@ export async function previewPackages(
   return toInstallPreview(raw)
 }
 
-/**
- * 按已确认的安装计划完成安装。
- *
- * trust 表示用户已确认信任这些来源，acceptPermissions 表示接受本次新增权限；
- * 计划是一次性的：提交后（无论成败）该 planId 都作废，需要重新预览。
- */
+/** 按已确认的安装计划完成安装（planId 一次性有效） */
 export function installPlan(planId: string, trust: boolean, acceptPermissions: boolean): Promise<void> {
   return PluginInstallPlan(planId, trust, acceptPermissions)
 }
 
-/**
- * 把 File 对象读成 base64（去掉 data URL 前缀）。
- *
- * 用 FileReader 而不是自行拼接字节：后者在大文件上要分块处理
- * 才不会爆栈，而这里由浏览器实现负责，稳定且代码更短。
- */
+/** 把 File 对象读成 base64（去掉 data URL 前缀） */
 export function readFileAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -456,32 +429,17 @@ export function readFileAsBase64(file: File): Promise<string> {
   })
 }
 
-/**
- * 读取插件内的文本资源。
- *
- * 开发模式下用于以 Blob 方式加载插件前端产物：Wails 在 dev 时把窗口
- * 指向 Vite dev server，/plugins/ 静态地址会被 Vite 接管而读不到文件。
- */
+/** 读取插件内的文本资源（开发模式下以 Blob 方式加载插件前端产物） */
 export function readPluginAsset(id: string, version: string, path: string): Promise<string> {
   return PluginReadAsset(id, version, path)
 }
 
-/**
- * 卸载插件。
- *
- * force 为 true 时，依赖它的插件会被后端自动停用，
- * 返回这些被停用的插件 id（供界面提示用户）。
- */
+/** 卸载插件；force 为 true 时返回被自动停用的依赖方 id */
 export function uninstallPlugin(id: string, force = false): Promise<string[]> {
   return PluginUninstall(id, force)
 }
 
-/**
- * 启用 / 停用插件。
- *
- * cascade 为 true 时，停用被其它插件依赖的插件会一并停用依赖方；
- * 返回本次实际变更（含被级联停用）的插件 id。
- */
+/** 启用 / 停用插件；cascade 为 true 时级联停用依赖方 */
 export function setPluginEnabled(id: string, enabled: boolean, cascade = false): Promise<string[]> {
   return PluginSetEnabled(id, enabled, cascade)
 }
@@ -541,12 +499,7 @@ export async function fetchAssetBase(): Promise<string> {
   return str(base) || '/plugins/'
 }
 
-/**
- * 调用插件后端 handler。
- *
- * 参数与返回值都按 JSON 传递；调用失败（插件未启用、缺少权限、
- * 插件内部抛错）都会以异常形式抛出，调用方负责展示。
- */
+/** 调用插件后端 handler，参数与返回值都按 JSON 传递 */
 export async function invokePlugin<T = unknown>(
   pluginId: string,
   handler: string,

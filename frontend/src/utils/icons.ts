@@ -219,6 +219,15 @@ export const ICONS: Record<string, IconDefinition> = {
       + '<circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/>'
       + '<circle cx="19" cy="12" r="1.5" fill="currentColor" stroke="none"/>',
   },
+  grip: {
+    label: '拖动排序',
+    // 两列竖排圆点：拖动排序的通用表示（六点手柄）
+    body: '<g fill="currentColor" stroke="none">'
+      + '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>'
+      + '<circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/>'
+      + '<circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/>'
+      + '</g>',
+  },
 }
 
 /** 拼错名字时的兜底 */

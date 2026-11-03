@@ -1,14 +1,5 @@
 <script setup lang="ts">
-/**
- * 下划线式页签（替代 `el-tabs` + `el-tab-pane`）。
- *
- * 与 `Tabs.vue`（分段控件）的分工：分段控件是「同一屏内切换一组互斥选项」（设置页），
- * 这里是**内容面板**切换 —— 页签在顶部、内容在下面，视觉更轻，适合面板里再分几块。
- *
- * 已挂载过的面板用 `v-show` 常驻（对齐 EP 的 `lazy` 语义：首次激活才挂载）：
- * 切回来时滚动位置、编辑器实例、没提交的输入都还在。项目约定禁用 `v-if` 切换面板，
- * 这里只在「从未打开过」时用 `v-if` 挡住，避免一开始就把所有面板都渲染出来。
- */
+/** 下划线式页签（替代 `el-tabs` + `el-tab-pane`） */
 import { computed, ref, watch } from 'vue'
 import { cn } from '@/lib/utils'
 
@@ -23,11 +14,7 @@ const props = defineProps<{
   class?: string
 }>()
 
-/*
- * 显式声明插槽类型（尤其是名字带变量的 `panel-<value>`）。
- * 不写这段时，模板里的「动态插槽名 + v-for 变量」会让 TS 把变量推成 any 循环引用
- * （vue-tsc 报 TS7022），因为插槽类型是从调用处反推的、而调用处又用到该变量。
- */
+/* 显式声明插槽类型（尤其是名字带变量的 `panel-<value>`） */
 defineSlots<{
   [name: `panel-${string}`]: () => unknown
   [name: `tab-${string}`]: (props: { item: { value: string, label?: string } }) => unknown

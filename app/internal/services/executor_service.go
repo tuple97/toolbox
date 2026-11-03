@@ -107,12 +107,7 @@ func (s *DBService) ExecuteStatement(ctx context.Context, req ExecutorRequest) (
 	if err != nil {
 		return nil, err
 	}
-	/*
-	 * 命令执行器允许临时切换库，但两种方言含义不同：
-	 *  - MySQL：库就是库，覆盖连接配置的默认库（进 DSN 的 dbname），下面再 USE 一次钉住；
-	 *  - PostgreSQL：DSN 的 database 是集群概念，不能拿 schema 去连（见 schemaName 的说明），
-	 *    所以连接仍用连接自身的库，「所选库」按 schema 通过 search_path 生效。
-	 */
+	/* 命令执行器允许临时切换库，但两种方言含义不同： - MySQL：库就是库 */
 	if req.Database != "" && !isPostgresType(conn.DBType) {
 		conn.Database = req.Database
 	}
@@ -123,11 +118,7 @@ func (s *DBService) ExecuteStatement(ctx context.Context, req ExecutorRequest) (
 	}
 	defer db.Close()
 
-	/*
-	 * 只读连接：后端兜底拒绝写操作（前端也会提示，但不能只依赖前端）。
-	 * 只看首关键字不够 —— `SELECT ... INTO OUTFILE` 会写文件、
-	 * `SELECT ... FOR UPDATE` 会加写锁，它们的首关键字都是 SELECT。
-	 */
+	/* 只读连接：后端兜底拒绝写操作（前端也会提示，但不能只依赖前端） */
 	if conn.ReadOnly {
 		if !isQueryStatement(sqlText) {
 			return nil, fmt.Errorf("连接「%s」已设为只读，已拒绝执行该写操作", conn.Name)
@@ -142,10 +133,7 @@ func (s *DBService) ExecuteStatement(ctx context.Context, req ExecutorRequest) (
 		return nil, fmt.Errorf("连接「%s」已标记为生产库，写操作需要确认后才能执行", conn.Name)
 	}
 
-	/*
-	 * 语句超时：连接配置优先（QueryTimeoutSecs），但不超过兜底上限，
-	 * 否则一个手滑填大的值会让语句无限挂起。
-	 */
+	/* 语句超时：连接配置优先（QueryTimeoutSecs），但不超过兜底上限， 否则一个手滑填大的值会让语句无限挂起 */
 	timeout := executorMaxDuration
 	if seconds := conn.QueryTimeoutSecs; seconds > 0 {
 		if custom := time.Duration(seconds) * time.Second; custom < timeout {
@@ -177,11 +165,7 @@ func (s *DBService) ExecuteStatement(ctx context.Context, req ExecutorRequest) (
 
 	start := time.Now()
 	if isQueryStatement(sqlText) {
-		/*
-		 * 分页：与模板查询链路共用 preparePagination——
-		 * 「哪些语句能分页、怎么拼 LIMIT」两边完全一致。
-		 * 统计总数必须用未加分页的原文，否则会被页大小截断。
-		 */
+		/* 分页：与模板查询链路共用 preparePagination—— 「哪些语句能分页、怎么拼 LIMIT」两边完全一致 */
 		countableSQL := sqlText
 		pageSize := 0
 		page := 1
@@ -277,13 +261,7 @@ func pinDatabase(ctx context.Context, session *sql.Conn, conn database.DBConnect
 	}
 
 	if target == "" {
-		/*
-		 * 没有任何库可切：不再直接报错。
-		 * 带库名的语句（`库`.`表`）并不需要默认库，直接放行；
-		 * 不带库名的语句会撞上 MySQL 的 1046，由 hintDatabaseError
-		 * 补上「请在上方选择库 / 加库名 / 配置默认库」的可操作提示。
-		 * （此前在这里硬报错，导致「分析带库名的语句」也被拦下。）
-		 */
+		/* 没有任何库可切：不再直接报错 */
 		return "", nil
 	}
 	if _, err := session.ExecContext(ctx, "USE "+quoteLiteralIdentifier(target, conn.DBType)); err != nil {
@@ -325,12 +303,7 @@ func isQueryStatement(sqlText string) bool {
 	return false
 }
 
-/*
- * 只读连接下仍可能藏着的写操作。
- *
- * 这些写法的首关键字都是 SELECT，`isQueryStatement` 会放行，
- * 因此需要在只读连接上额外拦一道。
- */
+/* 只读连接下仍可能藏着的写操作 */
 var readOnlyForbidden = []struct {
 	pattern *regexp.Regexp
 	reason  string
@@ -422,13 +395,7 @@ func (s *DBService) ListTableColumns(ctx context.Context, connID int64, database
 	// 只有 MySQL 的 information_schema.columns 带注释列
 	var query string
 	if isPostgresType(conn.DBType) {
-		/*
-		 * PostgreSQL 的 data_type 不带长度（`character varying`），
-		 * 这里用 udt_name + 长度 / 精度拼出展示用类型（varchar(32) / numeric(10,2)）：
-		 *  - character_maximum_length 只对字符类型有值，其它类型为 NULL；
-		 *  - numeric_precision / numeric_scale 对整数类型同样有值，必须限定在 numeric / decimal 上；
-		 *  - 数组类型的 udt_name 是 `_int4` 这种内部名，直接用 data_type（ARRAY）。
-		 */
+		/* PostgreSQL 的 data_type 不带长度（`character varying`） */
 		query = `SELECT column_name,
 		                CASE
 		                  WHEN data_type = 'ARRAY' THEN data_type
@@ -445,7 +412,7 @@ func (s *DBService) ListTableColumns(ctx context.Context, connID int64, database
 		         WHERE table_schema = ? AND table_name = ?
 		         ORDER BY ordinal_position`
 	} else {
-		// MySQL / MariaDB 的 column_type 本身就是完整定义（varchar(32) / decimal(10,2) / enum('a','b')）
+		// MySQL / MariaDB 的 column_type 本身就是完整定义（varchar(32) / decimal
 		query = `SELECT column_name, column_type, column_comment
 		         FROM information_schema.columns
 		         WHERE table_schema = ? AND table_name = ?
@@ -498,11 +465,7 @@ func (s *DBService) ListForeignKeys(ctx context.Context, connID int64, database 
 	queryCtx, cancel := context.WithTimeout(ctx, metaTimeout)
 	defer cancel()
 
-	/*
-		方言差异：MySQL 的 key_column_usage 直接带 referenced_* 三列；
-		PostgreSQL（标准 information_schema）没有这几列，得按约束名绕到
-		constraint_column_usage 才能拿到被引用的表 / 列。
-	*/
+	/* 方言差异：MySQL 的 key_column_usage 直接带 referenced_* 三列 */
 	var query string
 	if isPostgresType(conn.DBType) {
 		query = `SELECT kcu.column_name, ccu.table_name, ccu.column_name
@@ -604,10 +567,7 @@ func (s *DBService) CreateTableSQL(
 	if err := rows.Scan(scans...); err != nil {
 		return "", nil
 	}
-	/*
-		第二列始终是 DDL：表是 (Table, Create Table)，视图是
-		(View, Create View, character_set_client, collation_connection)。
-	*/
+	/* 第二列始终是 DDL：表是 (Table, Create Table)，视图是 (View, Create View */
 	return strings.TrimSpace(values[1].String), nil
 }
 

@@ -1,13 +1,4 @@
-/**
- * SQL 结构解析：表引用、派生表、CTE 的输出列。
- *
- * 从补全主模块拆出：这一层是**纯文本解析** —— 需要元数据的地方（`SELECT *` 展开、
- * 派生列的来源与类型）通过 `TableRefOptions` 注入，因此既不依赖编辑器，
- * 也不依赖候选生成，可以单独测。
- *
- * 为什么不用语法树：补全时语句通常还没写完（正打到 `where u.`），
- * 而这套容错扫描对半成品语句更宽容，也能给出「别名 → 表」这类语义。
- */
+/** SQL 结构解析：表引用、派生表、CTE 的输出列 */
 import type { TextRange } from '@/utils/sql/sqlSyntax'
 import {
   IDENT_OR_QUOTED_SOURCE,
@@ -18,10 +9,7 @@ import {
 
 // ---------------------------------------------------------------- 语句解析
 
-/*
- * 本模块用到的复合正则：标识符片段一律取自 sqlLexemes，
- * 于是「别名 / 列名 / 限定名 / 输出列」对中文与带引号写法的认识完全一致。
- */
+/* 本模块用到的复合正则：标识符片段一律取自 sqlLexemes */
 /** `*` 或 `t.*` */
 const STAR_ITEM_RE = new RegExp(`^(?:(${IDENT_SOURCE})\\.)?\\*$`)
 /** `expr AS 别名` */
@@ -29,12 +17,7 @@ const AS_ALIAS_RE = new RegExp(`\\bas\\s+(${IDENT_OR_QUOTED_SOURCE})\\s*$`, 'i')
 /** 输出项末尾的标识符（裸列名或「表达式 别名」的别名） */
 const TAIL_IDENT_RE = new RegExp(`(${IDENT_OR_QUOTED_SOURCE})\\s*$`)
 
-/**
- * 派生表 / CTE 的静态输出列。
- *
- * 除了名字，尽量带上来源表与类型：这类列以前在候选里只能显示「派生列」，
- * 看不出它到底来自哪张表、什么类型。
- */
+/** 派生表 / CTE 的静态输出列 */
 export interface VirtualColumn {
   name: string
   /** 来源表名（物理表 / 上游派生表 / CTE）；静态推不出来时为空 */
@@ -52,14 +35,7 @@ export interface TableRef {
   alias: string
   /** 派生表 / CTE 静态解析出的输出列；物理表为 undefined，走元数据查询 */
   virtualColumns?: VirtualColumn[]
-  /**
-   * 表名（`库.表` 整体）与别名声明在**被扫描文本**里的范围。
-   *
-   * 只对「文本里真写出来的引用」有意义：把无别名 CTE 补登记成来源、
-   * 派生表的合成引用都没有位置。补全不关心它们，
-   * 而位置敏感的能力（表别名重命名、表结构悬停）必须用它定位 ——
-   * 有了范围才能区分「别名声明」与「别名引用」，而不是满文档替换字符串。
-   */
+  /** 表名（`库.表` 整体）与别名声明在**被扫描文本**里的范围 */
   tableRange?: TextRange
   /** 别名声明（`FROM users u` 里的 `u`，含引号）的范围 */
   aliasRange?: TextRange
@@ -74,11 +50,7 @@ export const NON_ALIAS_KEYWORDS = new Set([
   'not', 'null', 'in', 'exists', 'straight_join', 'force', 'use', 'ignore',
 ])
 
-/**
- * 每个字符的括号深度（引号与注释里的括号不算）。
- *
- * 用于「只看本层来源」：深度 > 0 的关键字属于嵌套层，由那一层自己解析。
- */
+/** 每个字符的括号深度（引号与注释里的括号不算） */
 function parenDepths(text: string): Int8Array {
   const depths = new Int8Array(text.length)
   let depth = 0
@@ -138,10 +110,7 @@ export function skipSpaces(text: string, index: number): number {
   return i
 }
 
-/**
- * 读取一个标识符，支持裸名字与 `` `x` `` / `"x"` / `[x]` 三种引用
- * （重复引号按转义处理）。读不到时返回 null。
- */
+/** 读取一个标识符，支持裸名字与 `` `x` `` / `"x"` / `[x]` 三种引用 （重复引号按转义处理） */
 export function readIdentifier(text: string, index: number): { name: string, end: number } | null {
   const quote = text[index]
   if (quote === '`' || quote === '"' || quote === '[') {
@@ -198,12 +167,7 @@ export function readQualifiedName(text: string, start: number): { parts: string[
   return { parts, end: index }
 }
 
-/**
- * 读取别名：`AS x` 或紧跟的裸标识符（关键字不算别名）。
- *
- * `start` / `end` 是别名 token 在文本里的范围（含引号）——
- * 重命名要精确替换声明处，`end` 单独一个不够用。
- */
+/** 读取别名：`AS x` 或紧跟的裸标识符（关键字不算别名） */
 export function readAlias(
   text: string,
   start: number,
@@ -225,51 +189,26 @@ export function readAlias(
 
 /** 表引用解析的可选依赖（由调用方按当前连接提供） */
 export interface TableRefOptions {
-  /**
-   * 只看**本层**的来源（跳过括号里的 FROM / JOIN）。
-   *
-   * 作用域链已经把嵌套层单独拆出来了：`FROM users u JOIN (SELECT … FROM logs) t`
-   * 在这一层只有 `users` 与 `t` 两个来源，`logs` 属于派生表自己那层。
-   * 不跳的话本层来源会被算多 —— 「是否多来源」的判断（要不要给列加限定符）
-   * 与关联条件配对都会跟着错。
-   */
+  /** 只看**本层**的来源（跳过括号里的 FROM / JOIN） */
   topLevelOnly?: boolean
   /** 光标所在定义体的 CTE：不作为可见来源（递归自引用） */
   excludeCte?: (name: string) => boolean
-  /**
-   * 查询物理表的列，用于展开派生表 / CTE 里的 `SELECT *`。
-   * 实现方应「同步返回缓存 + 后台补齐」，绝不阻塞输入。
-   */
+  /** 查询物理表的列，用于展开派生表 / CTE 里的 `SELECT *` */
   resolveStarColumns?: (ref: TableRef) => VirtualColumn[] | null
-  /**
-   * 查询某张表某列的类型 / 注释，用于给派生列附上来源信息。
-   * 同样必须同步返回（查不到就返回 null）。
-   */
+  /** 查询某张表某列的类型 / 注释，用于给派生列附上来源信息 */
   resolveColumnMeta?: (ref: TableRef, column: string) => { dataType: string, comment: string } | null
   /** 查询 CTE 的输出列（跨层可见的 CTE 由调用方提供） */
   resolveCteColumns?: (name: string) => VirtualColumn[] | null
 }
 
-/**
- * 收集语句中的表引用（含别名）。
- *
- * 扫描 FROM / JOIN / UPDATE / INSERT INTO / DELETE FROM 之后的限定名，
- * FROM 后面的逗号多表也支持；`(SELECT …) 别名` 派生表会静态解析出输出列
- * （`SELECT *` 用 resolveStarColumns 展开），WITH 定义的 CTE 按名字登记
- * （`FROM cte`、`FROM cte x` 都能命中）。
- */
+/** 收集语句中的表引用（含别名） */
 export function collectTableRefs(
   statement: string,
   options: TableRefOptions = {},
 ): TableRef[] {
   const refs: TableRef[] = []
 
-  /*
-   * CTE 先解析：派生表内部可能引用同层 CTE（`FROM (SELECT * FROM cte) x`），
-   * 而 CTE 的列又要用 `*` 展开，所以这份映射必须在扫描表引用之前就绪。
-   * 这里只解析**本层**文本能看到的定义；跨层可见性由 buildScopes 用
-   * visibleCtes 回填（子查询能引用外层的 CTE）。
-   */
+  /* CTE 先解析：派生表内部可能引用同层 CTE（`FROM (SELECT * FROM cte) x`） */
   const ctes = new Map<string, VirtualColumn[] | null>()
   for (const def of collectCteDefs(statement, 0, () => null, options)) {
     // 光标所在的定义体（递归 CTE 自引用）由调用方排除，避免拿自己当可见来源
@@ -402,13 +341,7 @@ export function collectTableRefs(
   return refs
 }
 
-/**
- * 把派生表里的一个列引用溯源到来源表。
- *
- *  - 带限定符（`u.name`）：在该层的表引用里按别名 / 表名匹配；
- *  - 不带限定符：只有该层恰好只有一个来源时才敢归属（多表时归属谁都是猜）；
- *  - 来源本身是派生表 / CTE 时直接继承它已解析出的列（连带来源与类型）。
- */
+/** 把派生表里的一个列引用溯源到来源表 */
 export function resolveColumnOf(
   refs: TableRef[],
   qualifier: string,
@@ -459,15 +392,7 @@ function findTopLevelSelect(text: string): number {
   return -1
 }
 
-/**
- * 收集**顶层 SELECT 列表**里的列别名声明。
- *
- * 只认真正写了别名的输出项（`a AS b` / 表达式后的 `b`），因为重命名要动的是
- * 这个标识符；裸列名（`SELECT name`）与 `*` / `t.*` 一律不算 ——
- * 把「列名」当成「别名」改掉是最糟的错，宁可不提供。
- *
- * `offset` 是这段文本在文档里的起点，返回的是**文档坐标**。
- */
+/** 收集**顶层 SELECT 列表**里的列别名声明 */
 export function collectOutputAliases(statement: string, offset: number): OutputAlias[] {
   const selectAt = findTopLevelSelect(statement)
   if (selectAt < 0) {
@@ -525,12 +450,7 @@ function splitTopLevelRanges(text: string, from: number, to: number): TextRange[
 const BARE_IDENT_RE = new RegExp(`^${IDENT_SOURCE}$`)
 const QUALIFIED_IDENT_RE = new RegExp(`^${IDENT_SOURCE}\\s*\\.\\s*${IDENT_SOURCE}$`)
 
-/**
- * 一个输出项里声明的别名（偏移相对该输出项）；没有别名返回 null。
- *
- * 显式 `AS` 优先；隐式别名要求「标识符前面确实还有表达式」，
- * 且末尾标识符不在关键字黑名单里（`CASE … END` 的 END 不是别名）。
- */
+/** 一个输出项里声明的别名（偏移相对该输出项）；没有别名返回 null */
 function outputAliasOf(item: string): { name: string, at: number, end: number } | null {
   const trimmed = item.trim()
   if (!trimmed || STAR_ITEM_RE.test(trimmed)) {
@@ -687,12 +607,7 @@ export function unquoteIdent(name: string): string {
 /** 一处 CTE 定义：名字、输出列（解析不出为 null）与定义体在文档中的范围 */
 export interface CteDef {
   name: string
-  /**
-   * CTE 名字本身的范围（文档坐标，**含引号**）。
-   *
-   * 位置敏感的能力（CTE 重命名、将来跳转定义）用它定位声明：
-   * 只能声明处与引用处都精确命中才动，不做字符串替换。
-   */
+  /** CTE 名字本身的范围（文档坐标，**含引号**） */
   nameRange: TextRange
   columns: VirtualColumn[] | null
   /** 定义体 `( … )` 的起始位置（文档坐标，含括号内第一个字符） */
@@ -701,20 +616,7 @@ export interface CteDef {
   bodyTo: number
 }
 
-/**
- * 解析一段文本里的 CTE 定义：`WITH [RECURSIVE] name [(列, …)] AS (SELECT …), …`。
- *
- * 相比最初的实现，这里补齐了三件事：
- *  - **多处 WITH 都处理**（原来是拿到一处就 break），且只认顶层的 WITH，
- *    子查询里的 WITH 属于更内层的作用域，由那一层自己解析；
- *  - **递归 CTE**：显式列清单先入表，再解析定义体，于是体内 `FROM t` 有列可用；
- *    无列清单时用 SELECT 输出列预注册（可能不准，允许退化）；
- *  - **依赖链**：按声明顺序解析，`WITH a AS (…), b AS (SELECT * FROM a)`
- *    里 `b` 的 `*` 会用 `a` 的输出列展开。
- *
- * @param offset       该段文本在文档中的起点，用于把定义体范围换算成文档坐标
- * @param resolveKnown 查询「本层之外」已可见的 CTE 列（跨层广播用）
- */
+/** 解析一段文本里的 CTE 定义：`WITH [RECURSIVE] name [(列 */
 export function collectCteDefs(
   statement: string,
   offset: number,
@@ -725,10 +627,7 @@ export function collectCteDefs(
   /** 本层已解析出的 CTE（声明顺序），供依赖链与递归引用 */
   const known = new Map<string, VirtualColumn[] | null>()
 
-  /**
-   * CTE 定义体里 `SELECT *` 的列来源：
-   * 本层已解析的 CTE → 外部（跨层）已知 CTE → 物理表元数据。
-   */
+  /** CTE 定义体里 `SELECT *` 的列来源： 本层已解析的 CTE → 外部（跨层）已知 CTE → 物理表元数据 */
   const lookupColumns = (name: string): VirtualColumn[] | null =>
     known.get(name.toLowerCase())
     ?? resolveKnown(name)
@@ -821,12 +720,7 @@ export function collectCteDefs(
   return defs
 }
 
-/**
- * `SELECT *` / `t.*` 的展开来源：从 FROM 引用的表里找已解析出列的表（CTE 或物理表）。
- *
- * `qualifier` 非空时（`t.*` 写法）优先精确匹配该别名 / 表名；
- * 都找不到就返回 null（列未知），由调用方按「不猜」处理。
- */
+/** `SELECT *` / `t.*` 的展开来源：从 FROM 引用的表里找已解析出列的表（CTE 或物理表） */
 export function starColumnsOf(
   selectText: string,
   lookup: (name: string) => VirtualColumn[] | null,
@@ -852,11 +746,7 @@ export function starColumnsOf(
     : refs
 
   for (const ref of ordered) {
-    /*
-     * 派生表 / CTE 在 collectTableRefs 里已经解析出自己的列（ref.virtualColumns），
-     * 直接用；物理表才走 lookup 查元数据。只查 lookup 的话，
-     * `SELECT * FROM (SELECT * FROM t) x` 这类嵌套派生会在这里断掉。
-     */
+    /* 派生表 / CTE 在 collectTableRefs 里已经解析出自己的列（ref.virtualColumns） */
     const columns = ref.virtualColumns ?? lookup(ref.table)
     if (columns) {
       return columns
@@ -875,16 +765,7 @@ export interface OutputItem {
   column: string
 }
 
-/**
- * 解析一段 SELECT 的输出列（用于派生表 / CTE）。
- *
- * 名字只接受可静态确定的形式：`expr AS 别名`、`t.col`、别名跟随、裸列名；
- * `*` / `t.*` 交给 `resolveStar` 展开（参数是限定符，空串表示裸 `*`）；
- * 其它无法命名的表达式（如不带别名的 `COUNT(*)`）返回 null，按「列未知」处理。
- *
- * `resolveColumn` 用于把列引用溯源到来源表与字段类型：
- * 单表来源、或列上写了限定符时才敢归属。
- */
+/** 解析一段 SELECT 的输出列（用于派生表 / CTE） */
 export function parseSelectOutputColumns(
   selectText: string,
   resolveStar?: (qualifier: string) => VirtualColumn[] | null,
@@ -931,12 +812,7 @@ export function parseSelectOutputColumns(
   return columns
 }
 
-/**
- * 读取 SELECT 输出项；无法静态确定名字时返回 null。
- *
- * 支持 `expr AS 别名`、`t.col`（取最后一段）、`表达式 别名`（别名跟随）、裸列名，
- * 并尽量识别出其中的「列引用」，供上层溯源来源表与类型。
- */
+/** 读取 SELECT 输出项；无法静态确定名字时返回 null */
 export function readOutputItem(item: string): OutputItem | null {
   const asMatch = AS_ALIAS_RE.exec(item)
   if (asMatch) {
@@ -979,10 +855,7 @@ export function readOutputItem(item: string): OutputItem | null {
   return null
 }
 
-/**
- * 把一段文本识别成列引用（`col` / `t.col` / `db.t.col`）。
- * 不是纯粹的限定名（含函数、运算符、字面量等）时返回 null。
- */
+/** 把一段文本识别成列引用（`col` / `t.col` / `db.t.col`） */
 export function readColumnRef(text: string): { qualifier: string, column: string } | null {
   const trimmed = text.trim()
   if (!trimmed) {

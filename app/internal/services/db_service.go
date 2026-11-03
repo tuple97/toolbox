@@ -145,11 +145,7 @@ func (s *DBService) Execute(ctx context.Context, req ExecuteRequest) (*QueryResu
 	runCtx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 
-	/*
-	 * 固定会话 + 钉库：前端选了库（或连接配了默认库）时，把它「钉」在会话上，
-	 * 而不是指望 DSN 的 dbname —— 语义与执行器完全一致（见 ExecuteStatement）。
-	 * 统计总数、取数、注释反查必须都在这条会话上，否则各自可能落在不同的库。
-	 */
+	/* 固定会话 + 钉库：前端选了库（或连接配了默认库）时，把它「钉」在会话上 */
 	session, err := db.Conn(runCtx)
 	if err != nil {
 		return nil, fmt.Errorf("获取数据库连接失败: %w", err)
@@ -197,11 +193,7 @@ func (s *DBService) Execute(ctx context.Context, req ExecuteRequest) (*QueryResu
 	}
 	elapsed := time.Since(start).Milliseconds()
 
-	/*
-	 * 结果列注释 / 来源表 / 含长度的类型：查一次数据字典补上（独立短超时，失败静默跳过）。
-	 * 表名取「未加分页的原文」，与结果列同源；库用**实际生效的库** ——
-	 * 用连接默认库的话，没配默认库的连接会查空（模板查询曾因此没有描述）。
-	 */
+	/* 结果列注释 / 来源表 / 含长度的类型：查一次数据字典补上（独立短超时，失败静默跳过） */
 	commentCtx, cancelComments := context.WithTimeout(ctx, metaTimeout)
 	annotateResultColumns(commentCtx, session, conn.DBType, effectiveDB, countableSQL, columns)
 	cancelComments()
@@ -354,12 +346,7 @@ func (s *DBService) ExecuteTemplateQuery(
 		return nil, err
 	}
 
-	/*
-	 * 停用的模板不允许执行。
-	 *
-	 * 拦截放在这里而不是只放前端：模板可能被其它标签页 / 旧状态引用，
-	 * 「停用」的语义必须在真正跑 SQL 的这一层成立，否则停用形同虚设。
-	 */
+	/* 停用的模板不允许执行 */
 	if !tpl.Enabled {
 		return nil, fmt.Errorf("模板「%s」已停用，请先在 SQL 模板管理中启用", tpl.Name)
 	}
@@ -477,15 +464,7 @@ func queryRowsLimited(ctx context.Context, db rowQueryer, query string, limit in
 	return result, columns, truncated, nil
 }
 
-/*
- * columnTypeOf 把驱动的列类型整理成展示用的类型名。
- *
- * 只补 DECIMAL 这类精度（precision, scale）—— 它是驱动明确给出的语义。
- *
- * 刻意**不用** Length()：MySQL 下它给的是字节长度（utf8mb4 的 varchar(255)
- * 会报 1020），直接展示会误导；字符串 / 时间的声明长度由数据字典反查补上
- * （见 annotateResultColumns），那是精确的。
- */
+/* columnTypeOf 把驱动的列类型整理成展示用的类型名 */
 func columnTypeOf(columnType *sql.ColumnType) string {
 	name := columnType.DatabaseTypeName()
 	if name == "" {

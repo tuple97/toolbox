@@ -1,19 +1,4 @@
-/**
- * 表结构卡片：一份 DOM 拼装，三处使用 ——
- *  1. 编辑器里悬停表名 / 别名（CM tooltip，表面由 CM 提供）；
- *  2. 补全候选 tips 里的「来源表」可点击 → 弹出独立浮层（本模块的 popup）；
- *  3. 后续任何「想看表结构」的入口。
- *
- * 层次与列悬停卡片同一套约定：表名是主体；列清单用**容器级网格**对齐
- * （列名 / 类型 / 描述三列跨行对齐 —— 行自身是 `display: contents`，
- * 每行各自 max-content 的网格是跨行对不齐的，踩过）；主键 / 外键在列名旁
- * 用小徽标标识（主键金色、外键品牌色，与列悬停图标的用色一致）；
- * 索引列表固定在最下面一块。
- *
- * 数据分两批到：列是同步的（元数据缓存），主外键 / 索引异步补 ——
- * `renderTableCardInto` 可以随时用更全的 model 重画同一个宿主，
- * 复制按钮的回调放在 model 里跟着重建。
- */
+/** 表结构卡片：一份 DOM 拼装，三处使用 —— 1 */
 import type { TableIndexInfo } from '../tableIndexes'
 
 /** 「复制」图标（两张纸） */
@@ -214,13 +199,7 @@ export function closeTableCardPopup(): void {
   activeDismiss?.()
 }
 
-/**
- * 在锚点旁弹出表结构卡片（独立浮层，挂在 body 上不受编辑器裁切）。
- *
- * `loadExtras` 用于异步补主外键 / 索引：数据到了就重画同一张卡片。
- * 关闭时机：点浮层外、按 Esc、滚动或改窗口大小 —— 浮层是瞬时查看用的，
- * 跟着锚点满屏跑没有意义。
- */
+/** 在锚点旁弹出表结构卡片（独立浮层，挂在 body 上不受编辑器裁切） */
 export function openTableCardPopup(args: {
   model: TableCardModel
   anchor: { x: number, y: number }

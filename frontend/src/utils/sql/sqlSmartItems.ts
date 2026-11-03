@@ -1,15 +1,4 @@
-/**
- * 智能项候选：`*` 展开 / GROUP BY 非聚合列 / 比较值 / INSERT 列清单。
- *
- * 与普通候选的区别在于「插入的不只是光标前那个词」：
- *  - `*` 展开会**替换**文档里已经写下的 `*`（`u.*` 连限定符一起换掉）；
- *  - 列清单一次插入多个列名（GROUP BY 补齐、INSERT 列片段）。
- * 因此这些候选项各自带自定义 apply，本模块只做**纯文本解析与拼装**
- * （不依赖 EditorState / DOM），可以直接在单测里验证。
- *
- * 位置判定（是不是 SELECT 列表里、是不是比较运算右边）在这里完成，
- * 「从哪张表取列、值域从哪来」由宿主（sqlCompletion）以回调注入。
- */
+/** 智能项候选：`*` 展开 / GROUP BY 非聚合列 / 比较值 / INSERT 列清单 */
 import type { Completion } from '@codemirror/autocomplete'
 import { BOOST_SMART_ITEM } from './sqlCompletionKeywords'
 import { formatSqlValue } from './rowSql'
@@ -48,12 +37,7 @@ export interface SmartRange {
 
 // ---------------------------------------------------------------- 聚合判定
 
-/**
- * 聚合函数名（GROUP BY 判定用）。
- *
- * 命中「名字 + 左括号」即认为这一项是聚合表达式，不再作为分组列推荐；
- * 覆盖常见方言的聚合函数，各库独有的（如 percentile_cont）也一并列入。
- */
+/** 聚合函数名（GROUP BY 判定用） */
 const AGGREGATE_FUNCTIONS = [
   'count', 'sum', 'avg', 'min', 'max',
   'group_concat', 'string_agg', 'array_agg', 'json_agg', 'jsonb_agg', 'json_object_agg',
@@ -132,12 +116,7 @@ export function splitTopLevelList(text: string): string[] {
   return parts
 }
 
-/**
- * 标识符片段（正则字符串）：ASCII 标识符 + CJK。
- *
- * 中文表名 / 列名在本项目里是常见写法（补全还支持拼音首字母命中），
- * 这里必须认得它们 —— 否则「中文列名 AS 别名」会被当成表达式丢掉。
- */
+/** 标识符片段（正则字符串）：ASCII 标识符 + CJK */
 const IDENT = IDENT_SOURCE
 /** 一个标识符（裸写或带引号） */
 const IDENT_OR_QUOTED = IDENT_OR_QUOTED_SOURCE
@@ -175,12 +154,7 @@ export function readColumnRef(text: string): { qualifier: string, column: string
   return null
 }
 
-/**
- * 去掉 SELECT 列表项末尾的别名：`COUNT(*) AS c` → `COUNT(*)`、`u.name n` → `u.name`。
- *
- * 别名跟随时要求前面有空白且上一个非空白字符是标识符 / 右括号 / 引号，
- * 与派生表输出列解析同一套容错规则（`a + b` 这类不会被误剥）。
- */
+/** 去掉 SELECT 列表项末尾的别名：`COUNT(*) AS c` → `COUNT(*)`、`u.name n` → */
 export function stripAlias(item: string): string {
   const asMatch = AS_ALIAS_RE.exec(item)
   if (asMatch) {
@@ -200,12 +174,7 @@ export function stripAlias(item: string): string {
 
 // ---------------------------------------------------------------- SELECT 列表
 
-/**
- * SELECT 列表里出现的非聚合列（GROUP BY 推荐用）。
- *
- * 只认能静态确定成列引用的项：`COUNT(*) AS c`（聚合）与 `1 + 1`（表达式）都会跳过，
- * 保证推荐出来的都是「按规范确实该出现在 GROUP BY 里」的列。
- */
+/** SELECT 列表里出现的非聚合列（GROUP BY 推荐用） */
 export function nonAggregateColumnsOf(selectList: string): Array<{ qualifier: string, column: string }> {
   const columns: Array<{ qualifier: string, column: string }> = []
   const seen = new Set<string>()
@@ -230,13 +199,7 @@ export function nonAggregateColumnsOf(selectList: string): Array<{ qualifier: st
   return columns
 }
 
-/**
- * 光标所在层（同一括号深度）最后一个 SELECT 的列表文本。
- *
- * 「同一层」很关键：`SELECT (SELECT max(x) FROM t) |` 里最后一个 SELECT 在更内层，
- * 直接取文本上最后一个会把内层列表当成外层列表。
- * 列表文本在**顶层 FROM 处截断**（不截的话后面 FROM / WHERE 里的词会被当成列表项）。
- */
+/** 光标所在层（同一括号深度）最后一个 SELECT 的列表文本 */
 export function selectListTail(prefix: string): { text: string, start: number } | null {
   let depth = 0
   const selects: Array<{ depth: number, end: number }> = []
@@ -280,13 +243,7 @@ export function selectListTail(prefix: string): { text: string, start: number } 
     index = word.end
   }
 
-  /*
-   * 「光标所在层」= 深度不超过光标当前深度的最后一个 SELECT。
-   *
-   * 不能用「深度恰好相等」：光标正打在函数括号里（`SELECT (SELECT max(|`）时，
-   * 当前深度比所在 SELECT 深一层，但那个 SELECT 仍是「正在写的列表」；
-   * 反过来 `SELECT (SELECT 1) |` 光标已经出了括号，更深的那个 SELECT 就不该入选。
-   */
+  /* 「光标所在层」= 深度不超过光标当前深度的最后一个 SELECT */
   const last = selects.filter(item => item.depth <= depth).pop()
   if (!last) {
     return null
@@ -333,13 +290,7 @@ function firstTopLevelFrom(text: string, start: number): number {
 /** 纯星号项：`*` 或 `限定符.*` */
 const STAR_ITEM_RE = new RegExp(`^(?:(${IDENT})\\.)?\\*$`)
 
-/**
- * 列表末尾的 `*` / `u.*`：返回它在文本里的范围与限定符。
- *
- * 只在「最后一项就是星号本身」时命中：用户正打在星号后面，
- * 展开（替换星号）才是他想要的；星号出现在列表中间时不打扰。
- * `COUNT(*)` 这类写在括号里的星号不会被命中（整项不是纯星号）。
- */
+/** 列表末尾的 `*` / `u.*`：返回它在文本里的范围与限定符 */
 export function starAtSelectListEnd(listText: string): { text: string, qualifier: string, start: number, end: number } | null {
   const items = splitTopLevelList(listText)
   const raw = items[items.length - 1] ?? ''
@@ -371,11 +322,7 @@ const COMPARISON_RE = new RegExp(
   'i',
 )
 
-/**
- * 光标前是不是「列 + 比较运算符」。
- *
- * 命中说明此刻要写的是**值**而不是列名，于是可以给比较值候选（词典值域）。
- */
+/** 光标前是不是「列 + 比较运算符」 */
 export function comparisonTarget(prefix: string): { qualifier: string, column: string } | null {
   const match = COMPARISON_RE.exec(prefix)
   if (!match) {
@@ -412,13 +359,7 @@ export function insertTargetTable(prefix: string): { schema: string, table: stri
 
 // ---------------------------------------------------------------- 候选项构造
 
-/**
- * 片段型候选项：插入内容由 `insert` 决定，`range` 是要替换的文档区间
- * （`from === to` 就是纯插入）。
- *
- * label 仅用于展示与匹配：`*` 展开的 label 就是文档里那个 `*`（或 `u.*`），
- * 这样编辑器按已输入内容过滤时它恰好命中。
- */
+/** 片段型候选项：插入内容由 `insert` 决定 */
 export function smartFragmentItem(
   label: string,
   detail: string,
@@ -445,12 +386,7 @@ function isNumericType(dataType: string | undefined): boolean {
     && /^(?:tiny|small|medium|big)?int|^integer|^decimal|^numeric|^float|^double|^real|^serial|^bigserial|^money|^bool/i.test(dataType ?? '')
 }
 
-/**
- * 比较值候选：值本身作为 label（按已输入内容过滤），插入的是 SQL 字面量。
- *
- * 数值列且值看起来是数字时直接写数字，其余一律交给字面量转义
- * （字符串按方言处理引号与反斜杠）。
- */
+/** 比较值候选：值本身作为 label（按已输入内容过滤），插入的是 SQL 字面量 */
 export function smartValueItems(
   values: SmartCompareValue[],
   dataType: string | undefined,

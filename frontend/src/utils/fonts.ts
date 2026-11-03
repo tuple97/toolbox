@@ -1,28 +1,27 @@
-/** 字体选项：内置默认字体 + 本机已安装字体 */
+/** 字体选项：默认字体 + 本机已安装字体 */
 
 export interface FontOption {
-  /** 配置中存储的标识：内置为 `system`，本机字体为 `sys:<字族名>` */
+  /** 配置值：`system` 或 `sys:<字族名>` */
   value: string
   /** 下拉框展示名 */
   label: string
 }
 
-/** 字体角色：英文（拉丁与符号）与中文各选一份 */
+/** 字体角色：英文与中文各选一份 */
 export type FontRole = 'en' | 'zh'
 
-/** 随包内置的默认英文字体（唯一内置字体，文件与许可证见 assets/fonts） */
+/** 随包内置的英文字体 */
 export const BUILTIN_EN_FONT = 'Maple Mono'
 
-/** 中文字体的默认值：不随包内置，直接用系统自带字体 */
-export const DEFAULT_ZH_FAMILY = 'Consolas'
+/** 界面默认字体栈 */
+export const DEFAULT_UI_FONT_STACK
+  = '"Microsoft YaHei", "PingFang SC", "Segoe UI", "Helvetica Neue", Arial, sans-serif'
 
-/**
- * 默认字体的配置值。
- *
- * en 档解析为内置的 Maple Mono，zh 档解析为系统默认字族（Consolas）。
- * 沿用 'system' 而不另起新值：历史配置里存的就是它，
- * 因此换内置字体、拆成中英文两档都不会让老配置失效。
- */
+/** 编辑器默认字体栈 */
+export const DEFAULT_EDITOR_FONT_STACK
+  = '"Maple Mono", Consolas, "Microsoft YaHei", monospace'
+
+/** 默认字体的配置值 */
 export const BUILTIN_FONT_VALUE = 'system'
 
 /** 本机字体的配置值前缀 */
@@ -34,7 +33,7 @@ export const DEFAULT_FONT = BUILTIN_FONT_VALUE
 /** 中文字形漏字时的系统兜底 */
 const CJK_FALLBACK = '"Microsoft YaHei", "PingFang SC", sans-serif'
 
-/** 单个角色的字体栈片段：内置字体、系统默认字族或本机字体族 */
+/** 取单个角色的字体栈片段；默认值返回空串，由调用方补默认栈 */
 export function fontStackOf(value: string | undefined, role: FontRole): string {
   if (value && value.startsWith(SYSTEM_FONT_PREFIX)) {
     const name = value.slice(SYSTEM_FONT_PREFIX.length)
@@ -42,22 +41,29 @@ export function fontStackOf(value: string | undefined, role: FontRole): string {
       return `"${name}"`
     }
   }
-  return role === 'en' ? `"${BUILTIN_EN_FONT}"` : `"${DEFAULT_ZH_FAMILY}"`
+  return ''
 }
 
-/**
- * 合并英文与中文字体为一个字体栈。
- *
- * 英文在前：拉丁字母与符号一律走它（编辑器里等宽对齐靠这一步）；
- * 中文在后：只负责中文字形，缺失时再落到系统中文兜底。
- */
-export function composeFontStack(en: string | undefined, zh: string | undefined): string {
-  return `${fontStackOf(en, 'en')}, ${fontStackOf(zh, 'zh')}, ${CJK_FALLBACK}`
+/** 组合界面字体栈：用户选的字体优先，否则用系统默认栈 */
+export function composeUiFontStack(en: string | undefined, zh: string | undefined): string {
+  const parts = [fontStackOf(en, 'en'), fontStackOf(zh, 'zh'), CJK_FALLBACK].filter(Boolean)
+  return parts.length > 1 ? parts.join(', ') : DEFAULT_UI_FONT_STACK
 }
 
-/** 根据本机字体列表拼出下拉选项（默认字体始终排在最前） */
-export function buildFontOptions(systemFonts: string[], role: FontRole): FontOption[] {
-  const label = role === 'en' ? `${BUILTIN_EN_FONT}（内置）` : `${DEFAULT_ZH_FAMILY}（系统）`
+/** 组合编辑器字体栈：英文默认 Maple Mono，中文默认 Consolas */
+export function composeEditorFontStack(en: string | undefined, zh: string | undefined): string {
+  const enStack = fontStackOf(en, 'en') || `"${BUILTIN_EN_FONT}"`
+  const zhStack = fontStackOf(zh, 'zh') || 'Consolas'
+  return `${enStack}, ${zhStack}, ${CJK_FALLBACK}`
+}
+
+/** 拼出字体下拉选项；默认项标签按用途区分 */
+export function buildFontOptions(
+  systemFonts: string[],
+  role: FontRole,
+  defaultLabel = '系统默认字体',
+): FontOption[] {
+  const label = role === 'en' ? defaultLabel : `${defaultLabel}（中文）`
   const options: FontOption[] = [{ value: BUILTIN_FONT_VALUE, label }]
 
   for (const name of systemFonts) {

@@ -18,6 +18,8 @@ func installWithBackend(t *testing.T, mgr *Manager, mf *Manifest, script string)
 	if mf.Runtime.Entry == "" {
 		mf.Runtime.Entry = "backend/index.js"
 	}
+	// 源码目录安装受开发者模式约束，测试里显式开启
+	mgr.SetDeveloperMode(true)
 	dir := writePluginDir(t, mf, map[string]string{"backend/index.js": script})
 	preview, err := mgr.Preview(context.Background(),
 		[]PackageInput{{Source: SourceLocalDir, Ref: dir}},

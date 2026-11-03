@@ -1,16 +1,4 @@
-/**
- * 比较位置的值候选（类型感知）。
- *
- * 场景：`WHERE created_at = |`、`WHERE status = |`、`WHERE enabled = |`。
- * 这里回答「这个位置该写什么值」：
- *
- *  1. **值域候选**：词典里这份数据真实出现过的值（`status` → `active/disabled/pending`），
- *     永远排在前面 —— 它们最可能正是用户想写的；
- *  2. **类型模板**：列的**类型**决定还有哪些写法一定有 ——
- *     时间列给当前时间 / 今天的零点字面量，布尔列按方言给 `1/0` 或 `TRUE/FALSE`。
- *
- * 拿不到类型（列不属于已知表）时只给值域候选，不猜类型。
- */
+/** 比较位置的值候选（类型感知） */
 import type { Completion } from '@codemirror/autocomplete'
 import type { SqlDialect } from './rowSql'
 import { BOOST_SMART_ITEM } from './sqlCompletionKeywords'
@@ -73,12 +61,7 @@ function typeTemplateItems(args: TypedValueArgs): Completion[] {
   }
 }
 
-/**
- * 是否是布尔列。
- *
- * `tinyint(1)` 是 MySQL 里布尔的惯例写法，`bit(1)` 同理，
- * 这两者都要按布尔给候选（而不是当成普通数字）。
- */
+/** 是否是布尔列 */
 function isBooleanLike(dataType: string | undefined): boolean {
   const raw = (dataType ?? '').toLowerCase().replace(/\s+/g, '')
   return raw === 'bool' || raw === 'boolean'
@@ -86,12 +69,7 @@ function isBooleanLike(dataType: string | undefined): boolean {
     || raw === 'tinyint(1)'
 }
 
-/**
- * 类型模板候选项。
- *
- * `detail` 带上列名与真实类型（`device.status · tinyint`），
- * 这样列表里能一眼看出这个候选是为哪一列、哪个类型准备的。
- */
+/** 类型模板候选项 */
 function templateItem(
   label: string,
   insert: string,
@@ -115,12 +93,7 @@ function typeNameOfLabel(args: TypedValueArgs): string {
   return family === 'unknown' ? '值' : family
 }
 
-/**
- * 今天的零点字面量（本地时区）。
- *
- * 刻意只精确到「天」：补全候选不该带着秒级时间到处跑，
- * 用户写日期筛选时「今天 00:00:00」正是最常见的起点。
- */
+/** 今天的零点字面量（本地时区） */
 function todayStart(): string {
   const now = new Date()
   const pad = (value: number) => String(value).padStart(2, '0')

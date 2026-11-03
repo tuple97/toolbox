@@ -1,8 +1,4 @@
-/**
- * 结果行 → SQL 语句（结果表格右键「复制为…」→ INSERT / UPDATE / DELETE）
- *
- * 约定：UPDATE / DELETE 一律以主键为条件，主键查不到就不生成
- */
+/** 结果行 → SQL 语句（结果表格右键「复制为…」→ INSERT / UPDATE / DELETE） 约定：UPDA */
 
 import { executeStatement } from '@/api/executor'
 import { renderExportTemplate } from '@/api/templates'

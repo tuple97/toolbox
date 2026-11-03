@@ -24,7 +24,7 @@ const model = defineModel<boolean>({ default: false })
         bg-surface transition-colors peer-checked:border-brand peer-checked:bg-brand
         peer-focus-visible:outline-2 peer-focus-visible:outline-offset-1 peer-focus-visible:outline-accent"
     >
-      <Icon v-if="model" name="check" class="text-2xs text-white" />
+      <Icon v-if="model" name="check" class="text-2xs text-on-brand" />
     </span>
     <slot />
   </label>

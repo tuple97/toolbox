@@ -1,17 +1,4 @@
-/**
- * 应用自己的默认右键菜单（复制 / 剪切 / 粘贴）。
- *
- * 背景：应用整体屏蔽了浏览器原生右键菜单（见 main.ts），但输入框、文本域这些
- * 「真正的输入场景」此前被豁免，用户在这些控件上看到的仍是浏览器菜单。现在统一
- * 由这里接管，菜单项按三条规则决定启用与禁用：
- *
- *   - 复制：有选中内容，且右键点在选中的内容上；
- *   - 剪切：同复制，且选区位于可编辑位置；
- *   - 粘贴：剪贴板能读到非空内容，且右键位置可输入。
- *
- * 实现上有个关键点：点菜单会把焦点与选区从原控件上抢走，所以打开菜单时必须把
- * 「目标元素 + 选区区间」快照下来，执行动作前再恢复。
- */
+/** 应用自己的默认右键菜单（复制 / 剪切 / 粘贴） */
 import { reactive } from 'vue'
 import { copyText, readText } from '@/utils/clipboard'
 import { notify } from '@/utils/notify'
@@ -126,12 +113,7 @@ function captureSelection(target: HTMLElement | null, event: MouseEvent): Captur
   }
 }
 
-/**
- * 右键点是否落在选区的矩形内。
- *
- * 浏览器在「点选中的文字以外」时会先清掉选区，所以这一步多数情况下是冗余的；
- * 留着是为了把「点在选中内容上」这条规则表述完整，不依赖浏览器的清理时机。
- */
+/** 右键点是否落在选区的矩形内 */
 function pointInRange(range: Range, event: MouseEvent): boolean {
   for (const rect of Array.from(range.getClientRects())) {
     if (event.clientX >= rect.left && event.clientX <= rect.right
@@ -142,12 +124,7 @@ function pointInRange(range: Range, event: MouseEvent): boolean {
   return false
 }
 
-/**
- * 打开默认右键菜单。
- *
- * 由 main.ts 的全局 contextmenu 监听调用。组件自己实现了右键菜单的位置会在
- * 冒泡阶段先 preventDefault，那种情况由 main.ts 挡掉，不会走到这里。
- */
+/** 打开默认右键菜单 */
 export function openEditingContextMenu(event: MouseEvent): void {
   const target = findEditable(event.target)
   const captured = captureSelection(target, event)

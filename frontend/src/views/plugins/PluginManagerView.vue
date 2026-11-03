@@ -1,14 +1,5 @@
 <script setup lang="ts">
-/**
- * 插件管理页（单例视图）。
- *
- * 两个标签页：
- *   - 已安装：启停、信任、升级、回滚、卸载，并展示权限与依赖；
- *   - 插件市场：浏览官方索引、安装或更新插件。
- *
- * 安装永远经过「预览 → 确认」两步：预览把权限、依赖闭包与风险提示摊开，
- * 非官方来源必须显式勾选信任，升级引入新权限也必须二次确认。
- */
+/** 插件市场页（单例视图） */
 
 import { computed, onMounted, ref, watch } from 'vue'
 import Button from '@/components/ui/Button.vue'
@@ -40,6 +31,7 @@ import type {
   PluginPackageInput,
   PluginPackagePreview,
   PluginPlanItem,
+  PluginLocalContainer,
 } from '@/types'
 
 const emit = defineEmits<{ (e: 'ready'): void }>()
@@ -78,17 +70,7 @@ const menuPluginId = ref('')
 
 // ------------------------------------------------------------ 安装确认
 
-/**
- * 一次安装 = 一批包输入 + 一份安装计划。
- *
- * 四种来源共用同一条确认流程与同一个弹窗：
- *   - 市场安装：source = registry，带 sourceUrl + id（+ version）；
- *   - 网络地址 / 本地路径：带 ref；
- *   - 拖拽或文件选择进来的离线包：带 fileName + base64 内容。
- *
- * 后端按「整批」一次性求解依赖闭包，因此批量包的相互依赖由后端处理，
- * 前端只需要把输入凑齐、把计划摊开给用户确认。
- */
+/** 一次安装 = 一批包输入 + 一份安装计划 */
 /** 待安装的包输入 */
 const pendingInputs = ref<PluginPackageInput[]>([])
 /** 各输入的展示名（本地路径 / 包文件名），只用于读取期间的占位文案 */
@@ -149,11 +131,7 @@ const trustReason = computed(() => planPreview.value?.trustReason ?? '')
 /** 是否已经拿到可直接提交的安装计划 */
 const hasPlan = computed(() => Boolean(planPreview.value?.planId))
 
-/**
- * 是否还在求解依赖计划。
- *
- * 只在读到基本信息之后才有意义：清单都还没读出来时谈「解析依赖」没有意义。
- */
+/** 是否还在求解依赖计划 */
 const resolvingPlan = computed(() => !hasPlan.value && !planError.value)
 
 // ------------------------------------------------------------ 手动安装
@@ -161,33 +139,42 @@ const resolvingPlan = computed(() => !hasPlan.value && !planError.value)
 /** 手动安装弹窗可见 */
 const manualVisible = ref(false)
 /** 手动安装来源类型 */
-const manualSource = ref<PluginInstallSource>('local')
+const manualSource = ref<PluginInstallSource>('file')
 /** 手动安装的路径或地址 */
 const manualRef = ref('')
 
+/** 手动安装可选的来源 */
+const manualSources = computed<Array<{ value: PluginInstallSource, label: string, hint: string }>>(() => {
+  const options: Array<{ value: PluginInstallSource, label: string, hint: string }> = []
+  if (store.developerMode) {
+    options.push({ value: 'local', label: '本地目录', hint: '插件源码目录' })
+  }
+  options.push({ value: 'file', label: '安装包', hint: '.zip 文件' })
+  options.push({ value: 'url', label: '网络地址', hint: 'https://…' })
+  return options
+})
+
+// 关掉开发者模式时，别把用户留在「本地目录」这个已经不存在的选项上
+watch(() => store.developerMode, (enabled) => {
+  if (!enabled && manualSource.value === 'local') {
+    manualSource.value = 'file'
+  }
+})
+
 // ------------------------------------------------------------ 来源过滤
 
-/**
- * 市场页来源过滤（多选）。
- *
- * 不选即不过滤，等价于「查询全部已启用来源」——因此不需要再额外提供一个
- * 「合并全部来源」的选项，清空选择就是那个语义。
- */
+/** 市场页来源过滤（多选） */
 const marketFilter = computed({
   get: () => store.marketFilter,
   set: (value: string[]) => { store.marketFilter = value },
 })
 
-/** 来源多选选项：各个已配置来源（含已停用的，便于看出挂过哪些源） */
+/** 来源多选选项：只列已启用的来源 */
 const sourceOptions = computed<MultiSelectOption[]>(() =>
-  store.marketSources.map((source) => {
-    const label = source.name || source.url
-    return {
-      // 多选下拉只显示一行文字，停用状态只能拼进标签里
-      label: source.enabled ? label : `${label}（已停用）`,
-      value: source.url,
-    }
-  }))
+  store.enabledMarketSources.map(source => ({
+    label: source.name || source.url,
+    value: source.url,
+  })))
 
 /** 只勾选了一个来源时的来源状态；未选或选了多个时为 null */
 const activeSource = computed(() => {
@@ -213,14 +200,7 @@ const activeSourceWarning = computed(() => {
 // ------------------------------------------------------------ 生命周期
 
 onMounted(() => {
-  /*
-   * 立刻上报就绪，不要让联网动作拖住整页的初始化遮罩。
-   *
-   * 已安装列表与索引地址都是本地读取（毫秒级），而市场索引要访问
-   * GitHub：仓库未建 / 网络不通时请求会一直挂到超时，
-   * 之前把 emit('ready') 放在 Promise.all 之后，页面就会长时间
-   * 停在「正在加载」上。
-   */
+  /* 立刻上报就绪，不要让联网动作拖住整页的初始化遮罩 */
   emit('ready')
 
   void store.refreshInstalled()
@@ -244,12 +224,7 @@ watch(previewVisible, (visible) => {
 
 // ------------------------------------------------------------ 派生数据
 
-/**
- * 过滤后的市场条目。
- *
- * store.marketItems 已经按来源下拉做过一次过滤（合并 / 单源），
- * 这里只再叠加关键字搜索。
- */
+/** 过滤后的市场条目 */
 const marketItems = computed(() => {
   const keyword = search.value.trim().toLowerCase()
   const base = store.marketItems
@@ -317,12 +292,13 @@ function toggleSelect(plugin: InstalledPlugin): void {
   selectedIds.value = next
 }
 
-/** 从右键菜单进入多选模式，并把当前这张卡片一并选中 */
-function startSelect(plugin: InstalledPlugin): void {
+/** 进入 / 退出多选模式 */
+function toggleSelectMode(): void {
+  if (selectMode.value) {
+    exitSelectMode()
+    return
+  }
   selectMode.value = true
-  const next = new Set(selectedIds.value)
-  next.add(plugin.id)
-  selectedIds.value = next
 }
 
 /** 退出多选模式并清空已选 */
@@ -343,7 +319,6 @@ const menuItems = computed<ContextMenuAction[]>(() => {
   }
   const canToggle = !store.busy && (plugin.enabled || (plugin.trusted && plugin.compatible))
   return [
-    { key: 'select', label: '选择', divided: true },
     {
       key: 'toggle-enabled',
       label: plugin.enabled ? '停用' : '启用',
@@ -391,9 +366,6 @@ function handleMenuSelect(item: ContextMenuAction): void {
     return
   }
   switch (item.key) {
-    case 'select':
-      startSelect(plugin)
-      break
     case 'toggle-enabled':
       void handleToggleEnabled(plugin, !plugin.enabled)
       break
@@ -420,12 +392,7 @@ function pluginName(id: string): string {
   return store.installed.find(plugin => plugin.id === id)?.name ?? id
 }
 
-/**
- * 求卸载顺序：依赖方在前。
- *
- * A 依赖 B 时先卸 A —— 顺序反了，卸 B 会被「被 A 依赖」拦下。
- * 选中集合里出现依赖环时按访问顺序跳过，不会死循环。
- */
+/** 求卸载顺序：依赖方在前 */
 function uninstallOrder(ids: string[]): string[] {
   const state = new Set<string>()
   const out: string[] = []
@@ -477,11 +444,7 @@ async function handleUninstallSelected(): Promise<void> {
     }
   }
 
-  /*
-   * 剩下的失败基本都是「被没选中的插件依赖」。
-   * 这里不直接报错收场：先讲清楚是谁依赖它，再让用户决定要不要强制卸载
-   * （强制卸载会把依赖方停用，插件本身保留，可随时重新启用）。
-   */
+  /* 剩下的失败基本都是「被没选中的插件依赖」 */
   if (failed.length > 0) {
     const forced = await askConfirm({
       message: `以下插件被其它插件依赖，普通卸载会被拒绝：${failed.map(item => pluginName(item.id)).join('、')}。`
@@ -523,12 +486,7 @@ function missingReasonOf(plugin: InstalledPlugin, depId: string): string {
   return plugin.missingDependencies.find(item => item.id === depId)?.reason ?? ''
 }
 
-/**
- * 依赖的状态标签。
- *
- * 计划由后端按依赖在前排好序，这里只负责把动作翻译成人话；
- * 非 root 的条目会额外标出「依赖」，免得被当成用户自己选的包。
- */
+/** 依赖的状态标签 */
 function dependencyTag(dep: PluginPlanItem): { text: string, tone: 'info' | 'success' | 'warning' | 'brand' } {
   switch (dep.action) {
     case 'keep':
@@ -542,12 +500,7 @@ function dependencyTag(dep: PluginPlanItem): { text: string, tone: 'info' | 'suc
   }
 }
 
-/**
- * 某个包的来源索引是否验签通过；计划还没求解出来时返回 null（不显示标签）。
- *
- * 签名状态只存在于依赖计划的条目上（PackagePreview 里没有），
- * 因此求解前不该给卡片贴上「未签名」这种会误导人的结论。
- */
+/** 某个包的来源索引是否验签通过；计划还没求解出来时返回 null（不显示标签） */
 function sourceVerifiedOf(id: string): boolean | null {
   const item = planPreview.value?.plan.find(entry => entry.id === id)
   return item ? item.sourceVerified : null
@@ -619,12 +572,7 @@ function statusTags(plugin: InstalledPlugin): Array<{ text: string, tone: 'info'
 
 // ------------------------------------------------------------ 已安装操作
 
-/**
- * 切换启用状态。
- *
- * 停用被依赖的插件会被后端拒绝，所以先把「谁会受影响」讲清楚再级联停用，
- * 而不是让用户点一次、吃一个报错、再点一次。
- */
+/** 切换启用状态 */
 async function handleToggleEnabled(plugin: InstalledPlugin, enabled: boolean): Promise<void> {
   const cascade = !enabled && plugin.inUseBy.length > 0
   if (cascade) {
@@ -673,12 +621,7 @@ async function handleToggleTrusted(plugin: InstalledPlugin, trusted: boolean): P
   }
 }
 
-/**
- * 卸载插件。
- *
- * 被其它插件依赖时不直接禁用按钮，而是把「谁会受影响」讲清楚，
- * 用户确认后走强制卸载：依赖方被停用，插件数据照常清理。
- */
+/** 卸载插件 */
 async function handleUninstall(plugin: InstalledPlugin): Promise<void> {
   const dependents = plugin.inUseBy ?? []
   const confirmed = await askConfirm(dependents.length > 0
@@ -738,12 +681,7 @@ async function handleReload(): Promise<void> {
   }
 }
 
-/**
- * 用系统文件管理器打开插件的安装目录。
- *
- * 目录里是解包后的清单、前端产物与后端脚本：排查「插件加载失败」
- * 或改插件里的前端资源时，比自己去数据目录里翻要直接。
- */
+/** 用系统文件管理器打开插件的安装目录 */
 async function handleOpenFolder(plugin: InstalledPlugin): Promise<void> {
   try {
     await openPluginFolder(plugin.id)
@@ -755,12 +693,7 @@ async function handleOpenFolder(plugin: InstalledPlugin): Promise<void> {
 
 // ------------------------------------------------------------ 安装流程
 
-/**
- * 重置确认态：不需要确认的都默认勾上，减少无谓点击。
- *
- * 只能在拿到计划后调用 —— 信任与权限是整批求解出来的结论，
- * 求解前无从判断（基本信息里没有这两项）。
- */
+/** 重置确认态：不需要确认的都默认勾上，减少无谓点击 */
 function resetConfirmState(preview: PluginInstallPreview | null): void {
   trustConfirmed.value = preview ? !preview.needTrust : false
   permissionsAccepted.value = preview ? preview.addedPermissions.length === 0 : false
@@ -778,12 +711,7 @@ function resetPending(): void {
   permissionsAccepted.value = false
 }
 
-/**
- * 求解依赖计划。
- *
- * 计划是安装的唯一凭据，因此这一步是必须的：失败就没有 planId，
- * 也就无法提交安装（重试请重新打开预览）。
- */
+/** 求解依赖计划 */
 async function resolvePlan(): Promise<void> {
   if (pendingInputs.value.length === 0) {
     return
@@ -799,13 +727,7 @@ async function resolvePlan(): Promise<void> {
   }
 }
 
-/**
- * 把一批包输入推进确认弹窗，分两步补全信息。
- *
- * 第一步（基本信息）只读清单，毫秒级返回 —— 卡片可以立刻出来；
- * 第二步（依赖计划）要访问插件源，慢得多，但它决定「能不能装」，
- * 所以按钮在这之前一直是禁用的。
- */
+/** 把一批包输入推进确认弹窗，分两步补全信息 */
 async function loadPendingInputs(inputs: PluginPackageInput[], labels: string[]): Promise<void> {
   resetPending()
   pendingInputs.value = inputs
@@ -821,7 +743,37 @@ async function loadPendingInputs(inputs: PluginPackageInput[], labels: string[])
     return
   }
 
+  /* 选中的是容器目录（仓库根 / plugins 目录）时，预览里没有可安装的包， 只有一条容器信息：按源登记，不进安装确认 */
+  if (basicPreview.value?.container) {
+    await importContainerAsSource(basicPreview.value.container)
+    return
+  }
+
   await resolvePlan()
+}
+
+/** 把容器目录登记为本地插件源 */
+async function importContainerAsSource(container: PluginLocalContainer): Promise<void> {
+  // 容器目录不是可安装的包，确认弹窗对它没有意义
+  previewVisible.value = false
+  const path = container.path.replace(/\\/g, '/')
+  const url = `file://${path}`
+  if (store.marketSources.some(source => source.url === url)) {
+    notify.info('该目录已经是插件源')
+    return
+  }
+  const name = path.split('/').filter(Boolean).pop() ?? '本地目录'
+  try {
+    await store.updateSources([
+      ...store.marketSources,
+      { url, name, enabled: true, official: false },
+    ])
+  }
+  catch (e) {
+    notify.error(e instanceof Error ? e.message : String(e))
+    return
+  }
+  notify.success(`已把「${name}」添加为插件源（${container.count} 个插件），可在插件市场安装`)
 }
 
 /** 打开安装预览（市场 / 手动填写的地址或路径都走这里） */
@@ -863,12 +815,7 @@ async function openArchivePreview(files: File[]): Promise<void> {
   await loadPendingInputs(inputs, labels)
 }
 
-/**
- * 从本地路径批量预览安装。
- *
- * 只把路径交给后端（source + ref），由后端读取文件，
- * 因此系统选择器选出的多个目录 / 安装包可以一次全部提交。
- */
+/** 从本地路径批量预览安装 */
 async function openPathPreview(source: PluginInstallSource, paths: string[]): Promise<void> {
   if (paths.length === 0) {
     return
@@ -880,13 +827,12 @@ async function openPathPreview(source: PluginInstallSource, paths: string[]): Pr
   )
 }
 
-/**
- * 手动安装弹窗里的「选择」按钮。
- *
- * 选完直接进确认弹窗（不再需要先手输路径再点下一步）；
- * 只选一个时顺便回填输入框，方便用户下次复用或微调。
- */
+/** 手动安装弹窗里的「选择」按钮 */
 async function pickManualPaths(): Promise<void> {
+  if (manualSource.value === 'local' && !store.developerMode) {
+    notify.warning('从源码目录安装需要先在设置里开启开发者模式')
+    return
+  }
   const paths = manualSource.value === 'local'
     ? await pickDirectories('选择插件目录（可多选）')
     : await pickFiles('选择插件包（可多选）', [{ DisplayName: '插件包', Pattern: '*.zip' }])
@@ -971,9 +917,11 @@ function handleUpgrade(item: InstalledPlugin): void {
 
 /** 打开手动安装弹窗 */
 function openManual(): void {
-  manualSource.value = 'local'
+  // 默认打开「安装包」：未开启开发者模式时这是唯一可用的本地来源
+  manualSource.value = store.developerMode ? 'local' : 'file'
   manualRef.value = ''
   manualVisible.value = true
+  void store.loadDeveloperMode()
 }
 
 /** 提交手动安装 */
@@ -990,12 +938,7 @@ function submitManual(): void {
   })
 }
 
-/**
- * 是否可以确认安装。
- *
- * 关键是必须已经拿到安装计划：安装只认 planId，没有计划就没得提交。
- * 两道关卡则按计划给出的整批结论判断（批量安装沿用同一决定）。
- */
+/** 是否可以确认安装 */
 const canConfirm = computed(() => {
   const plan = planPreview.value
   if (!plan || !plan.planId) {
@@ -1033,11 +976,7 @@ async function confirmInstall(): Promise<void> {
   }
   catch (e) {
     notify.error(e instanceof Error ? e.message : String(e))
-    /*
-     * 计划是一次性的：后端在取出计划时就删掉了它，因此安装只要失败
-     * （下载失败、信任关卡拒绝……），手里这个 planId 就已经作废。
-     * 直接重新求解，用户改一下勾选就能重试，而不是对着一个装不动的计划反复点。
-     */
+    /* 计划是一次性的：后端在取出计划时就删掉了它，因此安装只要失败 （下载失败、信任关卡拒绝……） */
     planPreview.value = null
     await resolvePlan()
   }
@@ -1093,6 +1032,19 @@ function openSourceSettings(): void {
       </div>
 
       <div class="plugin-manager__actions">
+        <!--
+          批量选择的唯一入口：平时是「批量选择」，进入模式后变成「取消选择」。
+          选中态用主色标出来，否则一排次要按钮里分不清现在是哪种模式。
+        -->
+        <Button
+          :variant="selectMode ? 'primary' : 'secondary'"
+          size="sm"
+          :title="selectMode ? '退出多选模式' : '进入多选模式，可批量卸载'"
+          @click="toggleSelectMode"
+        >
+          <Icon :name="selectMode ? 'close' : 'check'" />
+          {{ selectMode ? '取消选择' : '批量选择' }}
+        </Button>
         <Button variant="ghost" size="sm" :disabled="store.busy" @click="handleReload">
           <Icon name="refresh" />
           重新加载
@@ -1116,22 +1068,17 @@ function openSourceSettings(): void {
           <Icon name="plus" />
           手动安装
         </Button>
-        <!-- 卡片被选中后才出现（紧挨「手动安装」）：批量卸载 + 退出多选 -->
-        <template v-if="selectedCount > 0">
-          <Button
-            variant="danger"
-            size="sm"
-            :disabled="store.busy"
-            @click="handleUninstallSelected"
-          >
-            <Icon name="trash" />
-            卸载选中插件({{ selectedCount }})
-          </Button>
-          <Button variant="ghost" size="sm" @click="exitSelectMode">
-            <Icon name="close" />
-            取消选择
-          </Button>
-        </template>
+        <!-- 有选中项才出现批量卸载；退出多选走右上角那个按钮，这里不再重复一个 -->
+        <Button
+          v-if="selectedCount > 0"
+          variant="danger"
+          size="sm"
+          :disabled="store.busy"
+          @click="handleUninstallSelected"
+        >
+          <Icon name="trash" />
+          卸载选中插件({{ selectedCount }})
+        </Button>
       </div>
     </header>
 
@@ -1644,17 +1591,20 @@ function openSourceSettings(): void {
     <Dialog v-model="manualVisible" title="手动安装插件" :width="520">
       <div class="plugin-manual">
         <p class="plugin-manual__hint">
-          支持三种来源：本地目录（开发者模式，直接指向插件源码目录）、
-          本地安装包（.zip）、网络地址。非官方来源都需要在下一步确认信任。
+          <template v-if="store.developerMode">
+            开发者模式已开启：选单个插件目录（直接运行该目录里的产物，不复制到资源目录）；
+            选插件仓库根目录 / 它的 <code>plugins</code> 目录时，该目录会被添加为插件源。
+            也支持已编译的安装包（.zip）与网络地址。
+          </template>
+          <template v-else>
+            只接受已编译产物：安装包（.zip）或网络地址。
+            需要直接指向源码目录，请先到「设置 → 高级」开启开发者模式。
+          </template>
         </p>
 
         <div class="plugin-manual__sources">
           <button
-            v-for="option in ([
-              { value: 'local', label: '本地目录', hint: '插件源码目录' },
-              { value: 'file', label: '安装包', hint: '.zip 文件' },
-              { value: 'url', label: '网络地址', hint: 'https://…' },
-            ] as Array<{ value: PluginInstallSource, label: string, hint: string }>)"
+            v-for="option in manualSources"
             :key="option.value"
             class="plugin-manual__source"
             :class="{ 'is-active': manualSource === option.value }"
@@ -1774,7 +1724,7 @@ function openSourceSettings(): void {
 
 .plugin-manager__count.is-brand {
   background: var(--brand-color);
-  color: #fff;
+  color: var(--color-on-brand);
 }
 
 .plugin-manager__actions {

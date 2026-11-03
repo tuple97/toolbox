@@ -1,13 +1,5 @@
 <script setup lang="ts">
-/**
- * 多选下拉（替代 `el-select multiple`）。
- *
- * 与 `Combobox` 的分工：那个是单选（承载一个值），这个是「一组值」。
- * 交互按多选的习惯来：**选中不关闭**（连着勾几个是常态）、点外部 / Esc 才关，
- * 已选项在触发器里显示成标签，超过 2 个折叠成「+N」。
- *
- * 浮层定位与 `Combobox` 共用 `utils/popover.ts`，保证两者的翻转 / 跟随行为一致。
- */
+/** 多选下拉（替代 `el-select multiple`） */
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 import { cn } from '@/lib/utils'
 import Icon from '@/components/ui/Icon.vue'
@@ -122,10 +114,7 @@ function onKeydown(event: KeyboardEvent) {
   }
 }
 
-/**
- * 点外部关闭：必须同时检查 root 与 panel —— 浮层已 Teleport 到 body，
- * 不在 root 里，只看 root 会在点选项时被当成「点外部」而先关闭。
- */
+/** 点外部关闭：必须同时检查 root 与 panel —— 浮层已 Teleport 到 body， 不在 root 里 */
 function onDocumentPointerDown(event: PointerEvent) {
   if (!open.value) {
     return
@@ -200,11 +189,12 @@ onBeforeUnmount(() => {
     </div>
 
     <Teleport to="body">
-      <div
-        v-if="open"
-        ref="panel"
-        class="fixed z-[9996] overflow-hidden rounded-lg border border-border bg-overlay
-          shadow-[var(--shadow-md)]"
+      <Transition name="app-pop">
+        <div
+          v-if="open"
+          ref="panel"
+          class="fixed z-[9996] overflow-hidden rounded-lg border border-border bg-overlay
+            shadow-[var(--shadow-md)]"
         :style="{
           left: `${position.left}px`,
           top: `${position.top}px`,
@@ -238,7 +228,7 @@ onBeforeUnmount(() => {
               :class="cn(
                 'flex size-[15px] shrink-0 items-center justify-center rounded border transition-colors',
                 isSelected(option.value)
-                  ? 'border-brand bg-brand text-white'
+                  ? 'border-brand bg-brand text-on-brand'
                   : 'border-border bg-surface',
               )"
             >
@@ -251,7 +241,8 @@ onBeforeUnmount(() => {
             没有匹配项
           </p>
         </div>
-      </div>
+        </div>
+      </Transition>
     </Teleport>
   </div>
 </template>

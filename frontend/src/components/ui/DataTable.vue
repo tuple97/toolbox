@@ -33,6 +33,11 @@ const props = withDefaults(defineProps<{
 })
 
 const emit = defineEmits<{
+  /** 双击行：调用方通常用来打开详情 */
+  (e: 'row-dblclick', payload: {
+    row: TRow
+    index: number
+  }): void
   (e: 'row-contextmenu', payload: {
     row: TRow
     index: number
@@ -185,11 +190,7 @@ document.addEventListener('keydown', handleEscape)
 onBeforeUnmount(() => document.removeEventListener('keydown', handleEscape))
 
 function onRowContextMenu(row: TRow, index: number, event: MouseEvent) {
-  /*
-   * 行菜单由调用方渲染，这里必须自己吞掉默认菜单：main.ts 的全局监听靠
-   * defaultPrevented 判断「是否有组件已经处理过右键」，不表态就会多弹一层
-   * 默认的复制/剪切/粘贴菜单。
-   */
+  /* 行菜单由调用方渲染，这里必须自己吞掉默认菜单：main.ts 的全局监听靠 defaultPrevented 判断「是否 */
   event.preventDefault()
   /* 右键作用范围＝选区；点在选区外时只保留该行 */
   if (props.selectable && !selected.value.includes(index)) {
@@ -263,6 +264,7 @@ function onRowContextMenu(row: TRow, index: number, event: MouseEvent) {
             )"
             @mousedown="handleRowMouseDown($event)"
             @click="selectable && handleRowClick(index, $event)"
+            @dblclick="emit('row-dblclick', { row, index })"
             @contextmenu="onRowContextMenu(row, index, $event)"
           >
             <td

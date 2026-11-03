@@ -7,24 +7,7 @@ import (
 	"strings"
 )
 
-/*
- * 结果列的「注释 / 来源表 / 完整类型」补全。
- *
- * database/sql 的 ColumnType 只提供类型名（MySQL 下是 `VARCHAR` 这种不带长度的），
- * 拿不到注释，也拿不到声明的长度；这些只存在数据库自己的数据字典里
- * （MySQL 的 information_schema.columns）。所以结果返回前用语句里出现的表名
- * 反查一次字典：列名能对上就填注释、来源表与**含长度的类型**
- * （`varchar(255)` / `decimal(10,2)`），对不上（表达式列、别名列、聚合列）
- * 留空 / 保留驱动给的类型 —— 前端只在有值时展示。
- *
- * 查询范围是**语句里实际出现的 schema 集合**（限定名 `mydb.users` 带出 mydb，
- * 裸表名回退到连接默认库）：连接没配默认库、模板里全用限定名时，只查
- * conn.Database 会得到 `table_schema = ''`，一条注释都查不到 —— 模板查询
- * 曾因此「只有类型没有描述」。
- *
- * 只做 MySQL / MariaDB：PostgreSQL 的注释在 pg_description 里需要额外 join，
- * 收益有限，暂不处理（那里的结果列注释恒为空）。
- */
+/* 结果列的「注释 / 来源表 / 完整类型」补全 */
 
 // annotateResultColumns 就地给结果列补注释、来源表与含长度的类型。
 //
@@ -84,11 +67,7 @@ func annotateResultColumns(
 	}
 	defer rows.Close()
 
-	/*
-	 * 结果列不带表名（`SELECT u.id, o.id` 两列同名），因此只能按列名匹配；
-	 * 多表出现同名列时取第一个 —— 有歧义时宁可给一个接近的，
-	 * 也不因为「不确定」而整列不显示。
-	 */
+	/* 结果列不带表名（`SELECT u.id, o.id` 两列同名），因此只能按列名匹配 */
 	comments := make(map[string]string, len(columns))
 	sources := make(map[string]string, len(columns))
 	types := make(map[string]string, len(columns))
@@ -132,14 +111,7 @@ func annotateResultColumns(
 	}
 }
 
-/*
- * displayTypeOf 把 information_schema.columns.column_type 整理成展示用类型名。
- *
- * 括号**外**整体大写（类型名与修饰词：`int unsigned` → `INT UNSIGNED`），
- * 括号**内**原样保留 —— `enum('a','B')` 的取值大小写是有意义的，
- * 一起大写会改掉语义。这样与驱动给的类型名（`INT` / `VARCHAR`）大小写一致，
- * 同一行表头里不会出现「有的全大写、有的全小写」。
- */
+/* displayTypeOf 把 information_schema.columns.column_type 整理成展示 */
 func displayTypeOf(raw string) string {
 	text := strings.TrimSpace(raw)
 	if text == "" {
@@ -181,13 +153,7 @@ type tableRef struct {
 	table  string
 }
 
-/*
- * fromTables 从语句里取出表来源（去重，保留限定名里的库 / 模式）。
- *
- * 这是补全用扫描器在服务端的极简版：只认 FROM / JOIN 后面的标识符，
- * `FROM (SELECT …)` 这种子查询直接跳过（它内部的 FROM 会被另一次匹配捕获）。
- * CTE 名也会被当成表名 — 字典里查不到，自然没有注释，无副作用。
- */
+/* fromTables 从语句里取出表来源（去重，保留限定名里的库 / 模式） */
 func fromTables(query string) []tableRef {
 	seen := make(map[string]bool)
 	refs := make([]tableRef, 0, 4)
@@ -227,12 +193,7 @@ func toAnySlice(values []string) []any {
 	return out
 }
 
-/*
- * stripLiterals 把注释与单引号字符串替换为空格。
- *
- * 保留反引号 / 双引号（MySQL 里可能是标识符，表名靠它们包着），
- * 只清理确定是「非结构文本」的部分。
- */
+/* stripLiterals 把注释与单引号字符串替换为空格 */
 func stripLiterals(query string) string {
 	builder := strings.Builder{}
 	builder.Grow(len(query))
@@ -283,13 +244,7 @@ func stripLiterals(query string) string {
 	return builder.String()
 }
 
-/*
- * qualifiedTableRef 读出一段限定名（库 / 模式 + 表名），读不到表名返回空 table。
- *
- * 支持 `db`.`t`、db.t、t 三种写法；`(` 开头（子查询）直接判为读不到。
- * 只关心首段与末段：MySQL 的限定名最多两段，多出来的段（PG 三段式那边
- * 反正不处理）按「首段是库、末段是表」近似。
- */
+/* qualifiedTableRef 读出一段限定名（库 / 模式 + 表名），读不到表名返回空 table */
 func qualifiedTableRef(text string) tableRef {
 	index := 0
 	first := ""

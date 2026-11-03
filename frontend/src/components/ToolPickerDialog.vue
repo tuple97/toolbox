@@ -42,13 +42,7 @@ interface PickerConfig {
   hidden: ToolType[]
 }
 
-/**
- * 可选工具。
- *
- * 默认取多例工具；插件可以通过工具声明里的 picker 字段
- * 显式决定是否出现在这里（例如单例工具也允许从这里新建）。
- * 用 computed 而不是模块级常量：插件是运行期注册的。
- */
+/** 可选工具 */
 const defaultOrder = computed<ToolType[]>(() =>
   TOOLS.filter(tool => tool.picker ?? tool.multi).map(tool => tool.type),
 )

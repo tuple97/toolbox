@@ -1,14 +1,4 @@
-/**
- * 模板片段的语法分析。
- *
- * 两件事：
- *  1. **文档级**：配对全部 `{{if}} / {{range}} / {{with}} / {{else if}} / {{else}} / {{end}}`，
- *     得到块树与「到某处为止仍未闭合的块栈」；
- *  2. **光标级**：把光标所在的片段切成「命令链 + 参数」，给出它在模板语言里的**语义意图**
- *     （新表达式 / 变量名 / 参数位 / 块条件 / 管道段 / 点号取值 / 收尾关键字）。
- *
- * 有了意图，候选生成就不用再靠「第一个词是不是函数名」这种字符串猜测。
- */
+/** 模板片段的语法分析 */
 import type { TextRange } from '@/utils/sql/sqlSyntax'
 import { lexTemplateFragment, wordBefore } from './templateLexer'
 import type { TemplateToken } from './templateLexer'
@@ -17,12 +7,7 @@ import { scanTemplateRegions } from './templateRegion'
 
 // ---------------------------------------------------------------- 结构模型
 
-/**
- * 收尾关键字：不出现在函数规格表里，但同样是模板语言的关键字。
- *
- * 单独列在这里是为了让「哪些词是关键字」只有一处定义 —— 解析、收尾候选、
- * 占位符提取（`else` / `end` 不是占位变量）都读它。
- */
+/** 收尾关键字：不出现在函数规格表里，但同样是模板语言的关键字 */
 export const TEMPLATE_CLOSING_KEYWORDS: ReadonlySet<string> = new Set(['else', 'end'])
 
 /** 该名字是不是模板语言的关键字（收尾词或函数 / 指令表中的名字） */
@@ -67,12 +52,7 @@ export interface TemplateBlockNode {
   to: number
   /** 块头命令（`{{if 条件}}` 里的「条件」部分） */
   head: TemplateCommand | null
-  /**
-   * 块的作用对象（with 的值 / range 的数组）。
-   *
-   * 作用域据此推导 `.` 指向谁：`{{with device}}` → device，
-   * `{{range $i, $v := device_list}}` → device_list。
-   */
+  /** 块的作用对象（with 的值 / range 的数组） */
   target: string
   /** 是否已经有 else 分支 */
   hasElse: boolean
@@ -141,12 +121,7 @@ export interface TemplateCursorContext {
 
 // ---------------------------------------------------------------- 文档解析
 
-/**
- * 解析整段模板文本。
- *
- * @param text   模板文本（也可以是包含模板的整段 SQL）
- * @param offset 文本在文档中的起始下标（默认 0）
- */
+/** 解析整段模板文本 */
 export function parseTemplateDocument(text: string, offset = 0): TemplateDocument {
   const document: TemplateDocument = { expressions: [], blocks: [], unclosedBlocks: [] }
   const stack: TemplateBlockNode[] = []
@@ -156,20 +131,14 @@ export function parseTemplateDocument(text: string, offset = 0): TemplateDocumen
     const bodyTo = (region.closeAt === null ? text.length : region.closeAt) - offset
     const body = text.slice(bodyFrom, bodyTo)
     const tokens = lexTemplateFragment(body, offset + bodyFrom)
-    /*
-     * 空白 token 必须留着：参数是按顶层空格切分的，提前滤掉会让
-     * `gt (len a) 0` 这类指令粘成一团。`words` 只用于判断头部关键字。
-     */
+    /* 空白 token 必须留着：参数是按顶层空格切分的，提前滤掉会让 `gt (len a) 0` 这类指令粘成一团 */
     const spaced = tokens.filter(token => token.kind !== 'unknown')
     const words = spaced.filter(token => token.kind !== 'space')
     const head = words[0]
     /** 取头部关键字之后的全部 token（含空白） */
     const after = (token: TemplateToken) => spaced.filter(item => item.from >= token.to)
 
-    /*
-     * 未闭合的区域（`{{if ` 正在写）：它还不是一条完整指令，
-     * 不参与块配对 —— 否则 `end` 会在条件都还没写完时提前出现。
-     */
+    /* 未闭合的区域（`{{if ` 正在写）：它还不是一条完整指令 */
     if (region.closeAt === null) {
       continue
     }
@@ -235,13 +204,7 @@ export function parseTemplateDocument(text: string, offset = 0): TemplateDocumen
   return document
 }
 
-/**
- * 取块的作用对象（`with` 的值 / `range` 的数组）。
- *
- * - `{{with device}}` / `{{with device.name}}` → 取块头表达式的首个标识符；
- * - `{{range device_list}}` → 数组名；
- * - `{{range $i, $v := device_list}}` → 赋值号之后的数组名。
- */
+/** 取块的作用对象（`with` 的值 / `range` 的数组） */
 function blockTargetOf(
   kind: 'if' | 'range' | 'with',
   head: TemplateCommand | null,
@@ -294,12 +257,7 @@ function expressionOf(words: TemplateToken[]): TemplateExpression | null {
   return { from: chain[0].from, to: chain[chain.length - 1].to, commands: chain }
 }
 
-/**
- * 切分命令链（按顶层 `|` 分段）。
- *
- * `piped` 标记管道段，`args` 只统计顶层（括号深度 0）空格分隔的参数，
- * 因此 `gt (len device_list) 0` 的第 2 个参数是 `0`、第 1 个是整段括号。
- */
+/** 切分命令链（按顶层 `|` 分段） */
 function commandChainOf(words: TemplateToken[]): TemplateCommand[] {
   const chain: TemplateCommand[] = []
   let current: TemplateToken[] = []
@@ -353,12 +311,7 @@ function buildCommand(tokens: TemplateToken[], piped: boolean): TemplateCommand 
   }
 }
 
-/**
- * 把 token 列表按「顶层空格 / 逗号」切成参数。
- *
- * 括号内的内容不切分（`(len a)` 是一个参数），逗号也算分隔（`$i, $v := arr`）。
- * 参数文本由组内 token 拼接，因此 `(len device_list)` 会连括号一起保留。
- */
+/** 把 token 列表按「顶层空格 / 逗号」切成参数 */
 function argumentsOf(tokens: TemplateToken[]): TemplateArgument[] {
   const args: TemplateArgument[] = []
   let depth = 0
@@ -397,13 +350,7 @@ function argumentsOf(tokens: TemplateToken[]): TemplateArgument[] {
 
 // ---------------------------------------------------------------- 光标分析
 
-/**
- * 分析光标在模板片段里的语义意图。
- *
- * @param fragment 片段文本（`{{` 之后到片段末尾）
- * @param offset   片段在文档中的绝对起始下标
- * @param cursor   光标的绝对位置
- */
+/** 分析光标在模板片段里的语义意图 */
 export function analyzeTemplateCursor(
   fragment: string,
   offset: number,
@@ -426,10 +373,7 @@ export function analyzeTemplateCursor(
     ? current.args.filter(argument => argument.to <= cursor).length
     : 0
 
-  /*
-   * 收尾关键字：整段就是 `else` / `end`（写完就不再给候选）。
-   * `{{else if }}` 不在此列 —— 它后面还等着写条件，应当给条件候选。
-   */
+  /* 收尾关键字：整段就是 `else` / `end`（写完就不再给候选） */
   if (/^(else|end)$/i.test(trimmed)) {
     return {
       kind: 'closing',
@@ -450,13 +394,7 @@ export function analyzeTemplateCursor(
 
   const dotInfo = dotContextOf(tokens, cursor, prefix)
 
-  /*
-   * 意图判定顺序（从「结构性」到「位置性」）：
-   *   点号取值 → 管道段 → 还没有命令名（新表达式）→ 正在打名字
-   *   → 块条件位 → 普通函数的参数位。
-   * 顺序不能换：`{{if de|}}` 既是「在打名字」也是「块条件」，
-   * 但后者才决定候选（条件用变量，而不是函数名）。
-   */
+  /* 意图判定顺序（从「结构性」到「位置性」）： 点号取值 → 管道段 → 还没有命令名（新表达式）→ 正在打名字 → 块条件 */
   let kind: TemplateCursorKind = 'unknown'
   if (dotInfo.dot) {
     kind = 'dot-variable'
@@ -511,22 +449,12 @@ function isAfterPipe(tokens: TemplateToken[], cursor: number): boolean {
   return false
 }
 
-/**
- * 光标之前的命令链（按顶层 `|` 分段，含正在写的那一段）。
- *
- * 空白 token 要保留：参数是靠顶层空格切分的，先滤掉它们就没法判断
- * 「已经写了几个参数」了。
- */
+/** 光标之前的命令链（按顶层 `|` 分段，含正在写的那一段） */
 function commandChainUpTo(tokens: TemplateToken[], cursor: number): TemplateCommand[] {
   return commandChainOf(tokens.filter(token => token.to <= cursor))
 }
 
-/**
- * 判断光标是否处于点号取值位。
- *
- * `{{ .name| }}` → dot=true、qualifier=''
- * `{{ device.name| }}` → dot=true、qualifier='device'
- */
+/** 判断光标是否处于点号取值位 */
 function dotContextOf(
   tokens: TemplateToken[],
   cursor: number,

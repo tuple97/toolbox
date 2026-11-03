@@ -1,26 +1,4 @@
-/**
- * SQL 语句切分与「光标落在哪条语句上」。
- *
- * 这里原来用语法树切分（Statement 节点 + 分号/空行规则），有三个绕不过去
- * 的问题：语法树会吞掉语句末尾的换行、对 `DELIMITER $$` 这类**客户端指令**没有概念、
- * 未写完的语句只剩错误节点；而「执行当前语句 / 画边框」恰恰最在意这三件事。
- * 所以改成显式的字符扫描器，并针对本项目的用法做了三处优化：
- *
- *  1. **括号深度增量维护**：判「行首关键字是否开启新语句」只看当前深度是否为 0，
- *     不再回头重扫语句前缀，避免逐行判定退化成 O(n²)；
- *  2. **切分结果按文本对象记忆**：CodeMirror 的 `Text` 不可变，光标移动时 `doc`
- *     引用不变，命中缓存就不必把整篇文档 `toString()` 再扫一遍（按方向键不再有开销）；
- *  3. **关键字表与续行规则只保留 MySQL / PostgreSQL**，其余方言细节直接砍掉。
- *
- * 术语：
- *  - `from` / `to`：语句**自身文本**的范围，两端都不含空白，`to` **不含**结尾分号
- *    （边框要连分号一起框时用 `statementEndWithSemicolon()` 扩一位）；
- *  - `leadFrom`：前置可归属的空白起点，光标停在这段空白里（行首缩进等）也算这条语句。
- *
- * 语句分隔符两类：**分号**（可被 MySQL `DELIMITER` 改写）与
- * **行首关键字软分隔**——不写分号、直接换行写第二条也能识别，
- * 因此语句内部出现空行也不会被切碎。
- */
+/** SQL 语句切分与「光标落在哪条语句上」 */
 import type { Text } from '@codemirror/state'
 
 /** 可以参与切分的文本：字符串，或 CodeMirror 的文档对象（用于复用缓存） */
@@ -62,11 +40,7 @@ const DIALECT_STARTERS: Record<'mysql' | 'postgres' | 'other', readonly string[]
 /** 既是函数名又是语句起始的关键字：紧跟 `(` 时不算新语句（`REPLACE(a,'x','y')`） */
 const FUNCTION_LIKE_STARTERS = new Set(['REPLACE', 'TRUNCATE', 'INSERT', 'VALUES'])
 
-/**
- * 语句「头部关键字」允许吞掉的正文关键字。
- * 例：`WITH c AS (...) SELECT ...` 里的 SELECT、`INSERT INTO t SELECT ...` 里的 SELECT
- * 都属于同一条语句，不该切分。
- */
+/** 语句「头部关键字」允许吞掉的正文关键字 */
 const HEAD_CONTINUATIONS: Record<string, ReadonlySet<string>> = {
   WITH: new Set(['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'MERGE']),
   INSERT: new Set(['SELECT', 'WITH', 'VALUES']),
@@ -92,12 +66,7 @@ const PREFIX_TARGETS = new Set(['SELECT', 'WITH', 'INSERT', 'UPDATE', 'DELETE', 
 /** 扫描方言：本项目只区分 MySQL / PostgreSQL 家族的词法差异 */
 export type SqlScanDialect = 'mysql' | 'postgres' | 'other'
 
-/**
- * 把数据库类型收敛成扫描方言。
- *
- * 补全层的空行边界检测也用它 —— 字符串 / 注释 / dollar quote 这些词法规则
- * 真实语句扫描器已经有一份，不能再各写一套。
- */
+/** 把数据库类型收敛成扫描方言 */
 export function normalizeSqlScanDialect(dbType = ''): SqlScanDialect {
   const value = dbType.toLowerCase()
   if (value.includes('mysql') || value.includes('maria')) return 'mysql'
@@ -149,12 +118,7 @@ function lineStartAt(text: string, pos: number): number {
 /** 切分结果缓存：`Text` 是不可变对象，引用相同就说明文档没变 */
 let lastSplit: { source: SqlSource; dialect: SqlScanDialect; statements: SqlStatement[] } | null = null
 
-/**
- * 把整段脚本切成顶层语句。
- *
- * @param source 整段脚本（字符串或 CodeMirror 文档对象）
- * @param dbType 数据库类型，决定方言细节（反引号、`DELIMITER`、dollar 引用）
- */
+/** 把整段脚本切成顶层语句 */
 export function splitSqlStatements(source: SqlSource, dbType?: string): SqlStatement[] {
   const dialect = normalizeSqlScanDialect(dbType)
   if (lastSplit && lastSplit.source === source && lastSplit.dialect === dialect) {
@@ -342,11 +306,7 @@ function scanStatements(text: string, dialect: SqlScanDialect): SqlStatement[] {
   return statements
 }
 
-/**
- * `pos` 处的行首关键字是否开启一条新语句。
- *
- * @param depth 当前括号深度：子查询/函数参数里的关键字不算语句首
- */
+/** `pos` 处的行首关键字是否开启一条新语句 */
 function opensNewStatement(text: string, pos: number, statementFrom: number, depth: number, starters: Set<string>): boolean {
   const keyword = wordAt(text, pos)
   if (!keyword || !starters.has(keyword)) return false
@@ -362,10 +322,7 @@ function opensNewStatement(text: string, pos: number, statementFrom: number, dep
   const recent = lastTopKeywords(text, statementFrom, pos, 2)
   const previous = recent[recent.length - 1]
 
-  /*
-   * EXPLAIN / DESC 后面紧跟的目标语句属于同一条，但**只允许一个**：
-   * 已经出现过目标关键字，说明这条 EXPLAIN 写完了，后面的 SELECT 就是新语句。
-   */
+  /* EXPLAIN / DESC 后面紧跟的目标语句属于同一条，但**只允许一个**： 已经出现过目标关键字 */
   if (head && PREFIX_KEYWORDS.has(head) && PREFIX_TARGETS.has(keyword)) {
     return hasPrefixTarget(text, statementFrom, head, pos)
   }
@@ -453,10 +410,7 @@ interface TopLevelToken {
   word: string
 }
 
-/**
- * 枚举 `[from, to)` 里括号深度为 0 的单词，跳过字符串与注释。
- * 只服务于「续行判定」这类小范围查询，不需要完整词法。
- */
+/** 枚举 `[from, to)` 里括号深度为 0 的单词，跳过字符串与注释 */
 function* topLevelTokens(text: string, from: number, to: number): Generator<TopLevelToken> {
   let depth = 0
   let i = from
@@ -537,15 +491,7 @@ function followsSemicolon(text: string, statementTo: number, pos: number): boole
   return !/[^\s]/.test(gap.replace(/--.*$/, '').replace(/#.*$/, ''))
 }
 
-/**
- * 光标 / 选区落点对应的语句，没有则返回 null。
- *
- * 判定顺序：
- *  1. 光标所在行是空行 → null（执行器据此提示「光标处未匹配到 SQL 命令」）；
- *  2. 落在语句文本范围内（含首尾）→ 这条；
- *  3. 紧跟结尾分号之后、且中间不跨行 → 仍算这条；
- *  4. 落在语句前的前置空白里（行首缩进、上一条注释行）→ 算这条。
- */
+/** 光标 / 选区落点对应的语句，没有则返回 null */
 export function statementAtCursor(source: SqlSource, pos: number, dbType?: string): SqlRange | null {
   const text = typeof source === 'string' ? source : source.toString()
   const cursor = Math.max(0, Math.min(pos, text.length))
@@ -572,10 +518,7 @@ function toRange(statement: SqlStatement): SqlRange {
   return { from: statement.from, to: statement.to, sql: statement.sql }
 }
 
-/**
- * 语句范围扩展到包含结尾分号（画边框用）。
- * 分号与语句文本之间既允许同行空白，也允许换行（`SELECT 1\n;`）。
- */
+/** 语句范围扩展到包含结尾分号（画边框用） */
 export function statementEndWithSemicolon(source: SqlSource, range: SqlRange): number {
   const text = typeof source === 'string' ? source : source.toString()
   let pos = range.to

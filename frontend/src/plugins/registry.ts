@@ -1,11 +1,4 @@
-/**
- * 插件贡献点注册表。
- *
- * 插件通过三处向宿主声明自己的位置：
- *   1. contributes.tools        → 工具入口（侧栏 / 标签 / 新建菜单）
- *   2. contributes.sidebar      → 侧栏分组（图标与排序）
- *   3. contributes.settings     → 设置面板与声明式配置项
- */
+/** 插件贡献点注册表 */
 
 import { markRaw, ref } from 'vue'
 import type { Component } from 'vue'
@@ -122,13 +115,7 @@ export function registerPluginGroups(pluginId: string, list: PluginSidebarGroup[
   groups.value = next
 }
 
-/**
- * 登记插件的设置面板。
- *
- * 声明式配置项按 setting.panel 归并到面板；未声明 panel 的配置项
- * 归入以插件名命名的默认面板。这样「只写配置、不写界面」的插件
- * 也能在设置页拥有自己的位置。
- */
+/** 登记插件的设置面板 */
 export function registerPluginSettings(plugin: InstalledPlugin): void {
   const built = new Map<string, RegisteredSettingsPanel>()
 
@@ -171,12 +158,7 @@ export function registerPluginSettings(plugin: InstalledPlugin): void {
   ]
 }
 
-/**
- * 插件为自己的设置面板提供自定义渲染组件。
- *
- * 清单里声明过 settingsPanels 时面板已存在，这里只补组件；
- * 未声明时按注册时的标题新建，避免「注册了却没有位置」。
- */
+/** 插件为自己的设置面板提供自定义渲染组件 */
 export function attachSettingsComponent(
   pluginId: string,
   panelId: string,

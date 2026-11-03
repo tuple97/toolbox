@@ -75,6 +75,11 @@ type InstallRecord struct {
 	UpdatedAt string `json:"updatedAt,omitempty"`
 	// PreviousVersion 上一个版本（用于回滚）
 	PreviousVersion string `json:"previousVersion,omitempty"`
+	// LocalDir 开发者模式「直接在源码目录运行」的插件：记录源目录，
+	// 内容不复制进资源目录。为空表示常规安装（内容在版本目录里）。
+	//
+	// 这样改插件源码立即生效，不用重装；资源目录里也就没有第二份副本。
+	LocalDir string `json:"localDir,omitempty"`
 }
 
 // IsTrusted 报告插件是否已获得信任。

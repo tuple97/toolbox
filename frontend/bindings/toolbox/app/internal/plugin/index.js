@@ -8,6 +8,7 @@ export {
     Engines,
     InstallPreview,
     InstalledInfo,
+    LocalContainer,
     MCPToolContribution,
     MarketplaceItem,
     MarketplaceSnapshot,

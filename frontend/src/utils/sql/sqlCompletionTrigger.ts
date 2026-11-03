@@ -1,19 +1,4 @@
-/**
- * SQL 补全的触发策略。
- *
- * 三档模式，供「设置 → SQL 提示触发方式」选择：
- *  - `manual`：只在显式触发（Ctrl+Space）时弹出；
- *  - `require-prefix`：打字自动弹，但要求光标前已有标识符前缀（或刚敲下点号）——
- *    避免一敲空格/括号就弹一屏；
- *  - `positional`：默认档。按位置判定：表位 / 列位 / 表达式位 / 关键字位 /
- *    关联条件位等「合理弹窗位」才自动弹，且要求确实输入了内容或结构字符。
- *
- * 说明：本版 CodeMirror 的 `autocompletion.activateOnTyping` 只接受布尔值，
- * 无法按「位置」逐次判定，因此打字触发改由本模块的扩展接管：
- * 关闭 CM 自带打字触发，命中策略时再显式 `startCompletion`。
- *
- * 判定函数是纯函数（只吃 facts），可以在 node 环境下直接测。
- */
+/** SQL 补全的触发策略 */
 import { startCompletion } from '@codemirror/autocomplete'
 import { EditorView } from '@codemirror/view'
 import type { EditorState, Extension } from '@codemirror/state'
@@ -66,29 +51,16 @@ export interface TriggerFacts {
   positionalEligible: boolean
   /** 本次输入插入的字符（打字触发时提供，多字符粘贴为 undefined） */
   insertedChar?: string
-  /**
-   * 光标处于模板片段 `{{ … }}` 内（仅模板编辑器会置真）。
-   *
-   * 模板里 `'{{ device_no }}'`（引号内插值）是最常见的写法，
-   * 片段内既不该被「字符串里不弹」拦掉，也不该被位置判定拦掉。
-   */
+  /** 光标处于模板片段 `{{ … }}` 内（仅模板编辑器会置真） */
   inTemplateFragment?: boolean
   /** 预留：以库名限定书写（`db`.`table`）时的库名 */
   useDatabasePrefix?: string | null
 }
 
-/**
- * 结构字符：敲下它们之后即使还没有标识符前缀也值得弹候选。
- * 空格放进来是因为输入 `SELECT * FROM ` 这类空档位置时正需要表名候选。
- */
+/** 结构字符：敲下它们之后即使还没有标识符前缀也值得弹候选 */
 const STRUCTURE_CHARS = new Set(['.', '(', ',', '=', ' ', '\n', '\t'])
 
-/**
- * 是否应该自动弹出补全。
- *
- * 显式触发永远放行（包括字符串 / 注释里——用户主动要候选时不拦），
- * 打字触发则按模式判定；字符串 / 注释内一律不打扰。
- */
+/** 是否应该自动弹出补全 */
 export function shouldTriggerCompletion(facts: TriggerFacts, mode: SqlTriggerMode): boolean {
   if (facts.origin === 'explicit') {
     return true
@@ -132,12 +104,7 @@ export interface SqlTriggerOptions {
   getExplicitMode?: () => SqlTriggerMode
 }
 
-/**
- * 打字触发扩展。
- *
- * 只在「用户敲入单个字符」时判定（粘贴 / 删除 / 组合输入不弹），
- * 命中策略后于下一轮事件循环显式打开补全——更新周期内不允许派发事务。
- */
+/** 打字触发扩展 */
 export function sqlCompletionTrigger(options: SqlTriggerOptions): Extension {
   return EditorView.updateListener.of((update) => {
     // 组合输入（中文/日文输入法）期间不打扰，等上屏后再判

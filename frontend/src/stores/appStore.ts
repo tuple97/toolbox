@@ -1,9 +1,4 @@
-/**
- * 应用启动状态。
- *
- * degraded 表示后端初始化失败（例如本地数据库损坏）：界面照常打开，
- * 只把「本地数据相关功能不可用」显式告知用户，并留一个重试入口。
- */
+/** 应用启动状态 */
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { fetchAppStartupState, retryInit } from '@/api/system'

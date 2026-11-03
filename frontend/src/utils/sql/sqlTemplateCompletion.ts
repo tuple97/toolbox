@@ -1,21 +1,4 @@
-/**
- * 模板（`{{ … }}`）与 JavaScript 脚本两种模式的补全。
- *
- * ## 分层
- *
- * ```
- *   templateRegion   → 区域定位（`{{` / `}}` 配对，与 SQL 的字符串无关）
- *   templateLexer    → token 化
- *   templateParser   → 块配对 + 命令链 + 光标「语义意图」
- *   templateScope    → with / range / $局部变量的作用域
- *   templateFunctions→ 函数规格（参数类型 / 块要求 / 文档）
- *   本文件           → 由「意图 + 作用域」产出候选与插入行为
- * ```
- *
- * 候选不再靠「片段里第一个词是不是函数名」这类字符串猜测：
- * 光标意图由解析器给出（`TemplateCursorContext.kind`），作用域决定
- * `.` 与变量列表该有哪些内容，两者拼起来就是候选集合。
- */
+/** 模板（`{{ … }}`）与 JavaScript 脚本两种模式的补全 */
 import type { Completion } from '@codemirror/autocomplete'
 import type { EditorState } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
@@ -58,12 +41,7 @@ export interface TemplateContext {
   unclosedBlocks: TemplateBlockNode[]
 }
 
-/**
- * 检测光标是否位于模板片段内，并解析出上下文。
- *
- * 区域判定只看 `{{` / `}}` 的先后，因此 `'{{ device_no }}'` 这种写在 SQL
- * 字符串里的插值同样是模板区域 —— 这是混合语言的结构事实，不靠调用顺序兜底。
- */
+/** 检测光标是否位于模板片段内，并解析出上下文 */
 export function readTemplateContext(state: EditorState, pos: number): TemplateContext | null {
   const doc = state.doc.toString()
   const region = templateRegionAt(doc, pos)
@@ -86,12 +64,7 @@ export function readTemplateContext(state: EditorState, pos: number): TemplateCo
   }
 }
 
-/**
- * 光标是否处于模板片段内（触发策略要用）。
- *
- * 与补全的分派一致：`'{{ device_no }}'` 这类引号内插值是最常见的写法，
- * 不能被「字符串里不弹」的判定拦掉。
- */
+/** 光标是否处于模板片段内（触发策略要用） */
 export function inTemplateFragment(state: EditorState, pos: number): boolean {
   return templateRegionAt(state.doc.toString(), pos) !== null
 }
@@ -105,13 +78,7 @@ export interface TemplateBlock {
   hasElse: boolean
 }
 
-/**
- * 扫描到文本末尾为止的块栈（栈顶是最内层未闭合的块）。
- *
- * 只统计**已经写完整**的指令（形如 `{{if …}}`，必须有闭合的 `}}`）：
- * 光标处正在写的 `{{if ` 还没成为块，不该让 `end` 提前出现。
- * `{{else if …}}` 计入所属 if 的分支，不会被当成新的块。
- */
+/** 扫描到文本末尾为止的块栈（栈顶是最内层未闭合的块） */
 export function templateBlockStack(text: string): TemplateBlock[] {
   return parseTemplateDocument(text).unclosedBlocks.map(block => ({
     kind: block.kind,
@@ -121,18 +88,7 @@ export function templateBlockStack(text: string): TemplateBlock[] {
 
 // ---------------------------------------------------------------- 候选
 
-/**
- * 模板候选：按光标意图决定给什么。
- *
- * | 意图 | 候选 |
- * |---|---|
- * | `expression` / `variable` | 变量 + 局部变量 + `.` + 函数 / 指令 + 块片段 + 收尾关键字 |
- * | `block-condition` | 条件用的变量与局部变量（不给函数名，避免写进条件位） |
- * | `function-argument` | 变量与局部变量（值） |
- * | `pipeline` | 可接在管道右侧的函数 + 变量 |
- * | `dot-variable` | 当前作用域 `.` 的属性（拿不到属性时回退到变量） |
- * | `closing` | 无（`{{else}}` / `{{end}}` 已经写完） |
- */
+/** 模板候选：按光标意图决定给什么 */
 export function templateBundle(
   context: TemplateContext,
   variables: TemplateVariable[],
@@ -208,12 +164,7 @@ function variableOptions(symbols: TemplateSymbol[], origin = '模板变量'): Co
   }))
 }
 
-/**
- * `.` 候选：当前作用域指向的值。
- *
- * 作用域里没有具体指向时（例如表达式开头）也给：`.` 始终表示
- * 「当前数据上下文」，写法上是合法的，只是没有字段可枚举。
- */
+/** `.` 候选：当前作用域指向的值 */
 function dotOption(dot: TemplateSymbol | null): Completion[] {
   return [{
     label: '.',
@@ -255,12 +206,7 @@ function typeLabel(type: TemplateValueType | undefined): string {
   }
 }
 
-/**
- * 按「当前参数位期望的类型」调整候选权重。
- *
- * 类型匹配的候选顶到前面（例如 `{{ len | }}` 优先数组 / 字符串），
- * 不匹配的不删除 —— 模板语言本身不严格，删掉反而会挡住用户。
- */
+/** 按「当前参数位期望的类型」调整候选权重 */
 function rankByExpectedType(options: Completion[], cursor: TemplateCursorContext): Completion[] {
   const expected = expectedArgumentType(cursor.callee, cursor.activeArgument)
   if (expected === 'any' || expected === 'unknown') {
@@ -315,23 +261,13 @@ const BLOCK_SNIPPETS: BlockSnippet[] = [
   { label: 'with 块', detail: '插入 {{with}} … {{end}} 骨架（块内可直接用 {{.字段}}）', open: 'with', body: '', withElse: false },
 ]
 
-/**
- * 整段替换型候选：替换的是**整个** `{{ … }}`，与「正在输入的名字」无关。
- *
- * 因此它不参与「已输入前缀」的过滤（见 sqlCompletion 的 finalizeBundle）——
- * 用户已经在片段里写了内容（`{{ 设备号| }}`）时，整段替换的入口不该整批消失。
- */
+/** 整段替换型候选：替换的是**整个** `{{ … }}`，与「正在输入的名字」无关 */
 export interface FragmentActionCompletion extends Completion {
   /** 忽略「已输入前缀」的过滤，始终留在候选里 */
   alwaysOffered?: true
 }
 
-/**
- * 块片段候选：整段替换当前 `{{ … }}`，插入可用的成对骨架。
- *
- * 光标停在块头条件处，接着输入第一个字符就会拿到该块作用域内的变量候选
- * （触发与普通补全走同一条路，不额外制造时序耦合）。
- */
+/** 块片段候选：整段替换当前 `{{ … }}`，插入可用的成对骨架 */
 function blockSnippetOptions(context: TemplateContext): FragmentActionCompletion[] {
   return BLOCK_SNIPPETS.map(snippet => ({
     label: snippet.label,
@@ -351,13 +287,7 @@ function indentAt(state: EditorState, pos: number): string {
   return /^[\t ]*/.exec(line.text)?.[0] ?? ''
 }
 
-/**
- * 块片段的插入：把整个 `{{ … }}`（含已写出的闭合括号）换成成对骨架。
- *
- * 骨架按当前行缩进排版，光标落在块头条件处（`{{if |}}`），
- * 并把「条件位 → 块体行首」登记成占位链：按 Tab 就能依次跳过，
- * 不必用鼠标点回去（占位随编辑漂移，见 templatePlaceholder）。
- */
+/** 块片段的插入：把整个 `{{ … }}`（含已写出的闭合括号）换成成对骨架 */
 function blockApply(context: TemplateContext, snippet: BlockSnippet) {
   return (view: EditorView, _completion: Completion, from: number, to: number) => {
     const state = view.state
@@ -393,14 +323,7 @@ function blockApply(context: TemplateContext, snippet: BlockSnippet) {
 
 // ---------------------------------------------------------------- 片段库候选
 
-/**
- * 片段库候选（`SQL_SNIPPETS`）。
- *
- * 只在**已经开始打字**（prefix 非空）时给：空前缀下把整个片段库倒进列表会淹没
- * 变量与函数候选。片段名本来就以触发词开头（`if 条件拼接`、`quote 安全加引号`），
- * `{{if` / `{{quote` 会自然命中，因此不需要再维护一份「触发词」表 ——
- * 片段库加一条，这里自动多一条候选。
- */
+/** 片段库候选（`SQL_SNIPPETS`） */
 function snippetOptions(context: TemplateContext): Completion[] {
   if (!context.cursor.prefix) {
     return []
@@ -414,10 +337,7 @@ function snippetOptions(context: TemplateContext): Completion[] {
   }))
 }
 
-/**
- * 片段插入：把光标所在的整个 `{{ … }}` 换成片段内容（片段自带 `{{ }}`），
- * 并把片段里的占位变量做成多选、登记成占位链 —— 插入后直接改名，回车跳下一个变量。
- */
+/** 片段插入：把光标所在的整个 `{{ … }}` 换成片段内容（片段自带 `{{ }}`） */
 function snippetApply(context: TemplateContext, snippet: SqlSnippet) {
   return (view: EditorView, _completion: Completion, from: number, to: number) => {
     const start = context.openAt
@@ -432,12 +352,7 @@ function snippetApply(context: TemplateContext, snippet: SqlSnippet) {
   }
 }
 
-/**
- * 片段内的收尾关键字：`else` / `end`。
- *
- * 按未闭合块栈决定：最内层是 if 且还没有 else / else-if 才给 `else`；
- * 有未闭合块才给 `end`。
- */
+/** 片段内的收尾关键字：`else` / `end` */
 function closingWordOptions(
   unclosed: TemplateBlockNode[],
   blocks: TemplateBlock[] = [],
@@ -480,12 +395,7 @@ function closingWordOptions(
   return options
 }
 
-/**
- * 普通位置（不在片段内）的收尾候选：直接给 `{{else}}` / `{{end}}`。
- *
- * 光标所在行的缩进已经写在光标左边，这里只补指令本身，
- * 所以插到空行上会自然对齐。
- */
+/** 普通位置（不在片段内）的收尾候选：直接给 `{{else}}` / `{{end}}` */
 export function templateClosingItems(state: EditorState, pos: number): Completion[] {
   const before = state.doc.sliceString(0, pos)
   const stack = parseTemplateDocument(before).unclosedBlocks
@@ -524,11 +434,7 @@ function closingItem(label: string, insert: string, detail: string, info: string
   }
 }
 
-/**
- * 模板候选的插入行为：
- *  - 光标后已有 `}}`（允许中间有空白）→ 只插名字，不重复补闭合；
- *  - 否则补上 ` }}`，光标停在 `}}` 之前，方便继续输入。
- */
+/** 模板候选的插入行为： - 光标后已有 `}}`（允许中间有空白）→ 只插名字，不重复补闭合； - 否则补上 ` }}` */
 function templateApply(name: string, suffix = '') {
   return (view: EditorView, _completion: Completion, from: number, to: number) => {
     const doc = view.state.doc
@@ -544,9 +450,7 @@ function templateApply(name: string, suffix = '') {
   }
 }
 
-/**
- * 脚本模式：注入的全局标识符（variables / rows / sqlTemplate …）。
- */
+/** 脚本模式：注入的全局标识符（variables / rows / sqlTemplate …） */
 export function scriptBundle(
   state: EditorState,
   pos: number,

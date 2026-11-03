@@ -1,10 +1,4 @@
-/**
- * 变量配置 → 补全用的模板变量。
- *
- * 变量配置里有「控件类型 + 数据类型」，补全关心的是「模板里它是什么值」：
- * 数组（range 用）、数字（比较用）、字符串…… 这里做一次映射，
- * 让参数位排序与点号取值能用上类型信息，而不是只看名字。
- */
+/** 变量配置 → 补全用的模板变量 */
 import type { VariableComponent, VariableDataType, VariableConfig } from '@/types'
 import type { TemplateValueType } from './templateFunctions'
 

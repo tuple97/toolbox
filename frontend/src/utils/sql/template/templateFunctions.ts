@@ -1,14 +1,4 @@
-/**
- * 模板函数 / 指令的「规格表」。
- *
- * 与纯粹的文档表不同，这里的每一项都带结构信息：
- *  - `kind`：是普通函数还是块指令（决定候选分类与是否需要配对收尾）；
- *  - `args`：参数名与期望类型（决定参数位该给什么候选，例如第 2 个参数必须是字符串）；
- *  - `returns`：返回类型（决定能否继续接管道段）；
- *  - `block`：块指令的收尾要求（是否需要 `end`、是否允许多分支）。
- *
- * 候选生成与「当前该给什么」的判断都读这份规格，避免散落在各处的字符串比较。
- */
+/** 模板函数 / 指令的「规格表」 */
 
 /** 模板值的类型（用于参数与变量匹配，不求精确，只求够用） */
 export type TemplateValueType =
@@ -56,12 +46,7 @@ function arg(name: string, type: TemplateValueType, optional = false): TemplateA
   return { name, type, optional }
 }
 
-/**
- * 规格表。
- *
- * 自定义函数（quote / upper / lower / default / join / now / in）与后端
- * `app/internal/utils/tplfunc.go` 注册的实现保持一致；其余是模板语言内置函数。
- */
+/** 规格表 */
 export const TEMPLATE_FUNCTION_SPECS: Record<string, TemplateFunctionSpec> = {
   // ---- 自定义函数（后端注册）
   quote: {
@@ -208,12 +193,7 @@ export function templateDirectiveNames(): string[] {
     .map(spec => spec.name)
 }
 
-/**
- * 当前参数位期望的类型（取不到返回 'any'）。
- *
- * 用于「第 2 个参数必须是字符串」这类判断：`{{ printf | }}` 与 `{{ eq | }}`
- * 的候选排序/过滤可以据此区分。
- */
+/** 当前参数位期望的类型（取不到返回 'any'） */
 export function expectedArgumentType(name: string, argumentIndex: number): TemplateValueType {
   const spec = templateFunctionSpec(name)
   if (!spec || argumentIndex < 0) {
@@ -223,11 +203,7 @@ export function expectedArgumentType(name: string, argumentIndex: number): Templ
   return declared ? declared.type : 'any'
 }
 
-/**
- * 某个函数还能不能再接参数（已经写满且没有可变参数时返回 false）。
- *
- * 只用于提示强弱，不做硬性拦截：模板语言本身对参数个数并不严格。
- */
+/** 某个函数还能不能再接参数（已经写满且没有可变参数时返回 false） */
 export function acceptsMoreArguments(name: string, written: number): boolean {
   const spec = templateFunctionSpec(name)
   if (!spec) {

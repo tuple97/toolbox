@@ -1,28 +1,4 @@
-/**
- * 当前语句边框：给光标所在的那条 SQL 画一个**连续的矩形框**。
- *
- * 核心是用 CodeMirror 自带的图层设施绘制（另有两处针对本项目的调整，见下）：
- *
- *  - `layer({ above: true, markers, update })` + `RectangleMarker`：与 CM 画光标层、
- *    选区层用的是同一套机制，**每个 measure 周期都会重跑 `markers()`**，滚动、改窗口、
- *    软换行重排、改字体全由 CM 驱动重绘 —— 不需要自己挂 ResizeObserver，也不用猜
- *    「这次几何变了没有」，早先那套「停稳后重测」的补丁因此全部删除；
- *  - `above: true`：层排在文本之上（CM 给的 z-index 从 150 起），主题里不透明的
- *    当前行底色不会把只占一行的语句框盖住；
- *  - 标记坐标是**文档坐标**，层随内容一起滚动，无需换算滚动偏移。
- *
- * 相对参考实现的两处调整：
- *  1. **只对已渲染的行做几何探针**：离屏行调 `coordsAtPos` 本来也只会拿到 null，
- *     这里先用 `visibleRanges` 框出真正渲染出来的行区间，区间外的行直接走
- *     「语句起点 x + 字数 × 字宽」估算，省掉大量无用的布局查询；
- *  2. **语句整体不在视口内时直接放弃**：既不必量也不必画（CM 会在滚动后重跑）。
- *
- * 量法：纵向取 `coordsAtPos` 的 top/bottom，拿不到时退回 `lineBlockAt`（它本身就是
- * 文档坐标）；横向逐行取行首的 `left` 与行尾的 `right`；某行的首尾落在不同视觉行
- * 说明发生了软换行，此时把**内容视口的左右边界**并进来（中间那些视觉行会一直排到
- * 折行边缘，即使最后一行很短）。四边各留 `BOX_INSET_PX` 的呼吸感；语句跨行超过
- * `MAX_BOXED_LINES` 时不画（PL/SQL 包体常是一整条语句，逐行探针会拖慢滚动）。
- */
+/** 当前语句边框：给光标所在的那条 SQL 画一个**连续的矩形框** */
 import type { EditorView, LayerMarker, ViewUpdate } from '@codemirror/view'
 import * as cmView from '@codemirror/view'
 import type { Extension } from '@codemirror/state'
@@ -48,12 +24,7 @@ interface BoxRange {
   to: number
 }
 
-/**
- * `layer` 与 `RectangleMarker` 是 @codemirror/view 的**内部 API**：运行时确实导出
- * （CM 自己的光标层、选区层就用它），但类型声明里没有公开。这里按参考项目的做法
- * 用模块对象接过来，并给出最小可用的类型；万一将来被移除，`statementBoxExtension`
- * 会安静地不画框，而不是让编辑器整个挂掉。
- */
+/** `layer` 与 `RectangleMarker` 是 @codemirror/view 的**内部 API**：运 */
 interface LayerConfig {
   above?: boolean
   class?: string
@@ -68,12 +39,7 @@ interface LayerApi {
 
 const layerApi = cmView as unknown as LayerApi
 
-/**
- * 量框需要用到视图成员。这里不 `Pick<EditorView, ...>`：其中 scaleX、
- * defaultCharacterWidth、visibleRanges 都属于内部成员，类型声明与运行时形态
- * 并不一致，直接用会让编译器与实现互相打架。改为按实际用到的形态自行声明，
- * 并在使用处做运行时判断（见 `renderedLineSpan`）。
- */
+/** 量框需要用到视图成员 */
 interface GeometryView {
   state: EditorView['state']
   coordsAtPos(pos: number, side?: -1 | 0 | 1): { top: number; bottom: number; left: number; right: number } | null
@@ -90,10 +56,7 @@ interface GeometryView {
 
 type PositionRect = NonNullable<ReturnType<EditorView['coordsAtPos']>>
 
-/**
- * 视口真正渲染出来的行号区间。
- * `visibleRanges` 是内部成员，取不到就返回 null（调用方退回「全部行都当已渲染」）。
- */
+/** 视口真正渲染出来的行号区间 */
 function renderedLineSpan(view: GeometryView): { first: number; last: number } | null {
   const ranges = view.visibleRanges
   if (!Array.isArray(ranges) || ranges.length === 0) return null
@@ -142,10 +105,7 @@ function measureStatementBox(view: GeometryView, from: number, to: number): Stat
   if (bottom <= top) return null
 
   const charWidth = view.defaultCharacterWidth
-  /*
-   * 离屏行的横向估算基准：**语句起点**的屏幕 x。
-   * 起点可见就直接量；否则用「行首 x + 行内偏移 × 字宽」推算（与缩进无关的部分是常量）。
-   */
+  /* 离屏行的横向估算基准：**语句起点**的屏幕 x */
   const statementLeft = (() => {
     const coords = view.coordsAtPos(from, 1)
     if (coords) return coords.left
@@ -199,11 +159,7 @@ function measureStatementBox(view: GeometryView, from: number, to: number): Stat
 /** 决定框哪一段；返回 null 表示不画 */
 type StatementLocator = (view: EditorView) => BoxRange | null
 
-/**
- * 边框扩展。
- *
- * @param locate 解析出要框的语句范围，返回 null 时不画
- */
+/** 边框扩展 */
 function statementBoxExtension(locate: StatementLocator): Extension {
   // 内部 API 万一改名/移除，就安静地不画框，而不是让编辑器挂掉
   if (typeof layerApi.layer !== 'function' || typeof layerApi.RectangleMarker !== 'function') {
@@ -249,10 +205,7 @@ function statementBoxExtension(locate: StatementLocator): Extension {
   })
 }
 
-/**
- * 给编辑器装配的入口：框住光标所在语句（含结尾分号）。
- * 语句之间的空行、纯空白处不显示边框。
- */
+/** 给编辑器装配的入口：框住光标所在语句（含结尾分号） */
 export function createStatementBoxExtension(getDbType: () => string): Extension {
   return statementBoxExtension((view) => {
     // 直接把文档对象交给切分缓存：光标移动时 doc 引用不变，不会重复扫描整篇文档

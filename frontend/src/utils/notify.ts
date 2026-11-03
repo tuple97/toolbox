@@ -1,4 +1,4 @@
-/** 应用内提示（替代 Element Plus 的 ElMessage）：响应式队列 + 宿主组件 Toaster.vue */
+/** 应用内提示：响应式队列 + 宿主组件 Toaster.vue */
 import { readonly, ref } from 'vue'
 
 export type NoticeTone = 'success' | 'error' | 'warning' | 'info'
@@ -26,7 +26,7 @@ function push(tone: NoticeTone, message: string): number {
   return id
 }
 
-/** 关掉某条提示（到时间自动触发，也可由关闭按钮触发） */
+/** 关掉某条提示（到时自动触发，也可由关闭按钮触发） */
 export function dismiss(id: number) {
   notices.value = notices.value.filter(notice => notice.id !== id)
 }

@@ -29,6 +29,9 @@ var defaultSettings = []database.Setting{
 	{Key: "control_size", Type: SettingTypeString, Value: "default"},
 	{Key: "editor_font_size", Type: SettingTypeNumber, Value: "13"},
 	{Key: "log_max_lines", Type: SettingTypeNumber, Value: "200"},
+	// 开发者模式：允许从插件源码目录安装并跳过来源信任确认；
+	// 关闭时只接受已编译产物（在线市场 / 离线包 / 下载地址）
+	{Key: "developer_mode", Type: SettingTypeBoolean, Value: "false"},
 	// 窗口背景：不再提供透明度与毛玻璃（窗口始终不透明）
 	// 界面字体标识（取值见前端 utils/fonts.ts）；_zh 只负责中文字形
 	{Key: "font_family", Type: SettingTypeString, Value: "system"},

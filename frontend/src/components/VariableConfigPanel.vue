@@ -23,18 +23,9 @@ const props = defineProps<{
   modelValue: VariableConfig[]
   /** 当前连接 ID */
   connId: number | null
-  /**
-   * 当前选中的库 / 模式。
-   *
-   * 「测试查询」按它执行（后端会把它钉在会话上，语义与查询、命令执行器一致）；
-   * 空表示用连接配置里的默认库。
-   */
+  /** 当前选中的库 / 模式 */
   database?: string
-  /**
-   * 可选的数据源列表。
-   *
-   * 不传时面板自己拉一次（用 fetchConnections），插件若已有连接列表可直接传入省一次请求。
-   */
+  /** 可选的数据源列表 */
   connections?: DBConnection[]
 }>()
 
@@ -202,13 +193,7 @@ function optionDbType(config: VariableConfig): string {
   return connectionOf(optionConnId(config))?.dbType ?? ''
 }
 
-/**
- * 动态选项 SQL 编辑器的补全上下文。
- *
- * 与编辑器标题行右侧的「数据源 / 库」同源：换连接、换库后候选立刻跟着变
- * （编辑器每次查询都重新求值，不需要重建实例）。没选连接时不给 SQL 上下文，
- * 只剩关键字与函数候选 —— 与模板编辑器未绑定连接时的表现一致。
- */
+/** 动态选项 SQL 编辑器的补全上下文 */
 function optionSqlContext(config: VariableConfig): Partial<CompletionRuntime> | undefined {
   const connId = optionConnId(config)
   if (!connId) {
@@ -243,12 +228,7 @@ function sourceConnId(config: VariableConfig): number | null {
   return optionConnId(config) || null
 }
 
-/**
- * 切换数据源。
- *
- * 换了连接后原来钉的库大概率在新连接里不存在，一并清掉回落到「跟随模板」，
- * 否则查询会带着一个不存在的库名直接报错。
- */
+/** 切换数据源 */
 function handleDataSourceChange(index: number, config: VariableConfig, value: number | null) {
   updateDynamicOption(index, config, {
     connId: value ?? undefined,
@@ -459,10 +439,7 @@ async function testDynamicOptions(config: VariableConfig) {
   min-height: 300px;
   border: 1px solid var(--border-color);
   border-radius: 12px;
-  /*
-   * 不铺底色：模板配置面板本身只有描边，卡片再铺一层品牌色淡底，就成了
-   * 「同一页只有这块是另一种颜色」。层次靠描边与列间分隔线表达。
-   */
+  /* 不铺底色：模板配置面板本身只有描边，卡片再铺一层品牌色淡底，就成了 「同一页只有这块是另一种颜色」 */
   overflow: hidden;
 }
 

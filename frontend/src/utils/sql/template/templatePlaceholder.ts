@@ -1,20 +1,4 @@
-/**
- * 模板占位符：片段插入后可以「一次性改名」的变量位置。
- *
- * 模型是**占位组**（`TemplatePlaceholderGroup`）：一个名字 + 它在文档里的所有出现位置。
- *
- *  - 片段里的变量合成一组：`{{if 变量}} AND 变量 = {{变量}} {{end}}` 的三处 `变量`
- *    是一组，选中时用**原生多选区**把三处一起选中 —— 输入即同步，
- *    改一处等于改全部（比「提交时批量替换」少一次心智负担）；
- *  - 骨架里的空位置（块体行首）是「无名字的零宽组」，只作为跳转目标。
- *
- * 位置存在 `StateField` 里：随编辑自动漂移、不写进文档、不进撤销历史。
- * Tab 与回车都在组之间依次跳（见 CodeEditor 的键位），跳到最后一组之后自动释放。
- *
- * 「哪些词是占位变量」由文本解析得出（`planPlaceholders`）：标识符词法取自
- * `sqlLexemes`、关键字表取自 `templateParser` / `templateFunctions`，
- * 因此片段库里新增一条片段、或新增一个模板函数，这里都不需要改代码。
- */
+/** 模板占位符：片段插入后可以「一次性改名」的变量位置 */
 import { EditorSelection, EditorState, StateEffect, StateField } from '@codemirror/state'
 import type { Extension } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
@@ -22,13 +6,7 @@ import { IDENT_BODY_SOURCE, IDENT_START_SOURCE } from '../sqlLexemes'
 import { isTemplateKeyword } from './templateParser'
 import { scanTemplateRegions } from './templateRegion'
 
-/**
- * 解析设置项 `template_placeholder_tab`（片段插入后是否用 Tab / 回车跳占位符）。
- *
- * 默认**开启**（与改造前一致），只有明确写成 `false` 才关；
- * 关掉后 Tab 回到缩进行为、回车回到换行。调用方在**按键时**读它，
- * 于是改完设置立即生效。
- */
+/** 解析设置项 `template_placeholder_tab`（片段插入后是否用 Tab / 回车跳占位符） */
 export function parsePlaceholderTabJump(raw: string | undefined): boolean {
   return raw !== 'false'
 }
@@ -78,13 +56,7 @@ const placeholderField = StateField.define<TemplatePlaceholderGroup[]>({
   },
 })
 
-/**
- * 占位链扩展（挂到编辑器即可；没有占位时就是空数组，零开销）。
- *
- * 一并开启多选区：同名占位要「一处改、处处改」，靠的就是多光标选区；
- * 而 CodeMirror 默认会把多选区收敛成单选区（`selection.asSingle()`），
- * 于是这件事必须由扩展自己声明 —— 不能指望每个调用方都记得开。
- */
+/** 占位链扩展（挂到编辑器即可；没有占位时就是空数组，零开销） */
 export function templatePlaceholderExtension(): Extension {
   return [placeholderField, EditorState.allowMultipleSelections.of(true)]
 }
@@ -94,12 +66,7 @@ export function placeholderGroups(state: EditorState): TemplatePlaceholderGroup[
   return state.field(placeholderField, false) ?? []
 }
 
-/**
- * 是否正处于「片段占位改编」状态：有占位组，且光标落在某一组里。
- *
- * 与表别名重命名同一套约定：这时**不给补全候选**（否则回车会被补全截走、
- * 多选区也可能被只替换主选区），回车归「跳到下一个占位」。
- */
+/** 是否正处于「片段占位改编」状态：有占位组，且光标落在某一组里 */
 export function isPlaceholderEditing(state: EditorState): boolean {
   const groups = placeholderGroups(state)
   if (!groups.length) {
@@ -110,11 +77,7 @@ export function isPlaceholderEditing(state: EditorState): boolean {
     group.ranges.some(range => range.from <= head && head <= range.to))
 }
 
-/**
- * 跳到下一组占位并选中它（组内所有出现一起选中）。
- *
- * 没有占位、或已经走到最后一组时返回 false —— 交回默认的 Tab / 回车行为。
- */
+/** 跳到下一组占位并选中它（组内所有出现一起选中） */
 export function jumpToNextPlaceholder(view: EditorView): boolean {
   const groups = placeholderGroups(view.state)
   if (!groups.length) {
@@ -151,12 +114,7 @@ export interface TemplateInsertPlan {
   groups: TemplatePlaceholderGroup[]
 }
 
-/**
- * 规划一次片段插入。
- *
- * 用 `[start, replaceTo)` 换成本段文本（默认只是插入到 start），
- * 占位组按**插入后**的文档坐标给出，初始选区落在第一组上。
- */
+/** 规划一次片段插入 */
 export function planTemplateInsert(
   text: string,
   start: number,
@@ -171,19 +129,7 @@ export function planTemplateInsert(
   }
 }
 
-/**
- * 解析一段模板文本里的占位变量，返回文档坐标下的占位组（`offset` 为文本起点）。
- *
- * 分两遍扫描：
- *  1. 先在 `{{ }}` 里找出**占位名集合** —— 只有作为模板变量出现过的词才算占位，
- *     这样普通 SQL 文本里的词（`INSERT` / `VALUES` / 列名）不会被误判；
- *  2. 再按这个名字集合扫全文（含普通文本），把同名出现全部收进同一组。
- *
- * 于是 `{{if 变量}} AND 变量 = {{变量}} {{end}}` 的三处 `变量` 是一组 ——
- * 中间那处在 SQL 文本里（用户要改的列名），只按「片段内的变量引用」扫会漏掉它。
- *
- * 同名合并成一组、按首次出现顺序排列 —— 这正是「多选改名」需要的形状。
- */
+/** 解析一段模板文本里的占位变量，返回文档坐标下的占位组（`offset` 为文本起点） */
 export function planPlaceholders(text: string, offset = 0): TemplatePlaceholderGroup[] {
   const names = placeholderNamesOf(text)
   if (!names.size) {
@@ -238,11 +184,7 @@ export function groupSelection(group: TemplatePlaceholderGroup): EditorSelection
   )
 }
 
-/**
- * 规整占位链：组内范围按位置排序去重、丢掉空组、组间按首次出现排序。
- *
- * 跳转依赖「按位置升序」这个不变式，所以规整只有这一处。
- */
+/** 规整占位链：组内范围按位置排序去重、丢掉空组、组间按首次出现排序 */
 export function normalizePlaceholderGroups(
   groups: TemplatePlaceholderGroup[],
 ): TemplatePlaceholderGroup[] {
@@ -292,12 +234,7 @@ function wordsOf(text: string, offset: number): PlaceholderWord[] {
   return words
 }
 
-/**
- * 这个词算不算占位变量。
- *
- * 排除三类：局部变量（`$i`，由 range 自己定义）、属性访问（`.字段` 由当前作用域提供）、
- * 模板关键字（函数 / 指令 / `else` / `end`，它们的名字不该被当成变量改写）。
- */
+/** 这个词算不算占位变量 */
 function isPlaceholderName(name: string, before: string): boolean {
   if (name.startsWith('$')) {
     return false

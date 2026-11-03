@@ -22,14 +22,7 @@ export interface ContextMenuAction {
   children?: ContextMenuAction[]
 }
 
-/**
- * 工具类型标识。
- *
- * 内置工具（plugins / settings / connections / sql-template / db-query /
- * command-executor / dictionary / placeholder）是固定枚举；
- * 插件贡献的工具是运行时才知道的任意标识，因此这里放宽为 string。
- * 后端的 database.Tab.ToolType 同样是 string。
- */
+/** 工具类型标识：内置工具为固定枚举，插件工具为任意 string */
 export type ToolType = string
 
 /** 内置工具类型（仅用于代码内做穷尽判断时的参考） */
@@ -364,12 +357,7 @@ export type UpdateState =
   | 'ready'
   | 'error'
 
-/**
- * 更新状态快照，与后端 update.Snapshot 对应。
- *
- * 这是前端唯一的状态源：`wails:updater:*` 事件只当作「状态可能变了」的通知，
- * 收到后回后端重新拉一次快照，前端不自己推断状态。
- */
+/** 更新状态快照（前端唯一状态源），与后端 update.Snapshot 对应 */
 export interface UpdateSnapshot {
   /** 当前阶段 */
   state: UpdateState
@@ -671,21 +659,10 @@ export interface InstalledPlugin {
   previousVersion: string
 }
 
-/**
- * 插件安装来源。
- *
- * archive 是前端已把包读成字节流（拖拽 / 文件选择）的情况：
- * 路径与网络地址都由后端读取，只有它必须把内容传给后端。
- */
+/** 插件安装来源；archive 表示包内容已由前端读成字节流 */
 export type PluginInstallSource = 'registry' | 'url' | 'file' | 'local' | 'archive'
 
-/**
- * 一次安装中的一个包输入。
- *
- * 与后端 PackageInputWire 对应：市场来源给 sourceUrl + id (+ version)，
- * 本地来源给 ref（路径），离线包给 fileName + contentBase64。
- * 信任与权限不在这里 —— 它们属于「确认安装」那一步，见 PluginInstallPlan。
- */
+/** 一次安装中的一个包输入，与后端 PackageInputWire 对应 */
 export interface PluginPackageInput {
   source: PluginInstallSource
   /** registry 来源时点选的插件源地址；留空表示跨来源自动挑选 */
@@ -707,11 +684,7 @@ export interface PluginRegistrySource {
   url: string
   name: string
   enabled: boolean
-  /**
-   * 是否为宿主内置的官方源。
-   *
-   * 由后端按地址判定，不可通过配置修改；界面上它不可删除。
-   */
+  /** 是否为宿主内置官方源（后端判定，不可修改） */
   official: boolean
 }
 
@@ -784,12 +757,7 @@ export interface PluginPackagePreview {
   dependencies: PluginDependencyRef[]
 }
 
-/**
- * 安装预览（权限确认弹窗的数据源）。
- *
- * 一份预览对应一次安装的完整依赖闭包：选中的包在 packages 里，
- * 连它们带出来的依赖一起在 plan 里。planId 是安装的唯一凭据。
- */
+/** 安装预览（权限确认弹窗的数据源），planId 是安装的唯一凭据 */
 export interface PluginInstallPreview {
   /** 安装计划标识；只读清单（不求解依赖）时为空 */
   planId: string
@@ -809,6 +777,16 @@ export interface PluginInstallPreview {
   addedPermissions: string[]
   /** 需要联网下载的安装包数量 */
   pendingDownloads: number
+  /** 选中的是容器目录（仓库根 / plugins 目录）时的提示：它不是可安装的包 */
+  container?: PluginLocalContainer | null
+}
+
+/** 容器目录信息：目录本身不是插件，应登记为本地插件源 */
+export interface PluginLocalContainer {
+  /** 目录绝对路径 */
+  path: string
+  /** 目录下发现的插件数量 */
+  count: number
 }
 
 /** 插件市场条目 */

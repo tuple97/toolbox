@@ -1,14 +1,4 @@
-/**
- * 执行记录面板的自定义日志语言与「四套编辑器主题」。
- *
- * 主题分两层：
- *  - EditorView.theme 负责渲染层（背景 / 光标 / 选区 / 行号 / 浮层）；
- *  - HighlightStyle 负责语法高亮层（token → 颜色）。
- *
- * EditorPalette 与 PALETTES 是设计资产（与具体编辑器无关），
- * 在这里被展开成 CM6 的两层扩展；主题是 per-editor 扩展，
- * 通过 Compartment 动态切换，不依赖任何全局注册表。
- */
+/** 执行记录面板的自定义日志语言与四套编辑器主题 */
 import { HighlightStyle, StreamLanguage, syntaxHighlighting } from '@codemirror/language'
 import type { StreamParser } from '@codemirror/language'
 import { EditorView } from '@codemirror/view'
@@ -40,10 +30,7 @@ export function editorThemeNameOf(appTheme: string): string {
   return APP_THEME_OF[appTheme] ?? APP_THEME_DARK
 }
 
-/**
- * SQL 关键字（日志高亮与补全共用）。
- * 小写书写，匹配时统一转小写比较。
- */
+/** SQL 关键字（日志高亮与补全共用，统一小写比较） */
 const SQL_KEYWORDS = [
   'select', 'from', 'where', 'and', 'or', 'not', 'in', 'is', 'null', 'like', 'between',
   'insert', 'into', 'values', 'update', 'set', 'delete', 'truncate', 'replace',
@@ -88,10 +75,7 @@ const LIGHT_RULES: TokenRule[] = [
   { token: 'log-number', foreground: 'b45309' },
 ]
 
-/**
- * IDEA Darcula 风格的 token 颜色。
- * 尽量贴近 IntelliJ 默认暗色方案：关键字橙、字符串绿、数字蓝。
- */
+/** IDEA Darcula 风格的 token 颜色 */
 const IDEA_RULES: TokenRule[] = [
   { token: 'log-request', foreground: 'cc7832', fontStyle: 'bold' },
   { token: 'log-response', foreground: '6a8759', fontStyle: 'bold' },
@@ -321,13 +305,7 @@ function codeHighlightStyle(palette: EditorPalette): HighlightStyle {
   ])
 }
 
-/**
- * 生成某套应用主题对应的 CM6 扩展。
- *
- * 两层各司其职：
- *  1. EditorView.theme —— 渲染层（背景透明、光标、选区、行号、当前行、补全浮层）；
- *  2. syntaxHighlighting(HighlightStyle) —— 高亮层（日志 token + 代码 token）。
- */
+/** 生成某套应用主题对应的 CM6 扩展（渲染层 + 高亮层） */
 export function editorThemeExtensions(themeName: string): Extension[] {
   const palette = PALETTES[themeName] ?? PALETTES[APP_THEME_DARK]
   const h = (value: string) => `#${value}`
@@ -349,12 +327,7 @@ export function editorThemeExtensions(themeName: string): Extension[] {
       },
       '&.cm-focused .cm-selectionBackground': { backgroundColor: h(palette.selection) },
       '.cm-activeLine': { backgroundColor: h(palette.lineHighlight) },
-      /*
-       * 语句边框（见 utils/sqlStatementBox.ts）：光标所在语句的一个整框。
-       *
-       * 位置/尺寸由 CM 的 layer 机制写入（RectangleMarker），这里只管视觉：
-       * 边框颜色跟随主题。层必须不吃鼠标事件，否则框住的那段文字点不动。
-       */
+      /* 语句边框（utils/sqlStatementBox.ts）：光标所在语句的整框，层不吃鼠标事件 */
       '.cm-sql-box-layer': {
         pointerEvents: 'none',
       },
@@ -372,11 +345,7 @@ export function editorThemeExtensions(themeName: string): Extension[] {
         backgroundColor: 'transparent',
         color: h(palette.lineNumberActive),
       },
-      /*
-       * 浮层（补全列表 / 悬停卡片）统一观感：圆角 + 阴影 + 克制的边框。
-       * 内边距交给各自的容器，这里不设 padding；圆角要裁到内部内容上，
-       * 所以带上 overflow: hidden。
-       */
+      /* 浮层（补全列表 / 悬停卡片）：圆角 + 阴影 + 边框 */
       '.cm-tooltip': {
         backgroundColor: h(palette.widget),
         border: `1px solid ${h(palette.border)}`,
@@ -391,15 +360,7 @@ export function editorThemeExtensions(themeName: string): Extension[] {
         fontStyle: 'normal',
         padding: '4px',
       },
-      /*
-       * 弹层宽度与高度。
-       *
-       * 宽度必须显式放宽：CM6 基础主题把 `> ul` 限制在 `min(700px, 95vw)`，
-       * 而「列名 + 类型 + 表名 + 长备注」很容易超过它 —— 列表默认
-       * `overflow-x: hidden` + `text-overflow: ellipsis`，超出的部分会被截成
-       * `...`（图标也一起切掉），选中该行时 CM 的 scrollIntoView 还会让行
-       * 横向滚动，中段内容整体移出视野。放宽后长内容能完整放下。
-       */
+      /* 弹层宽高：需显式放宽，否则长内容被 CM6 基础主题截断 */
       '.cm-tooltip.cm-tooltip-autocomplete > ul': {
         maxWidth: 'min(1100px, 95vw)',
         maxHeight: '300px',
@@ -414,11 +375,7 @@ export function editorThemeExtensions(themeName: string): Extension[] {
         backgroundColor: h(palette.selection),
         color: h(palette.foreground),
       },
-      /*
-       * 补全弹层排版：CM6 基础主题会给「匹配到的片段」加下划线、
-       * 给 detail 加斜体。这里改成「命中片段用品牌色加粗」——
-       * 比底色块克制，深色底上也不会显脏。
-       */
+      /* 补全弹层排版：命中片段用品牌色加粗，不用基础主题的下划线 */
       '.cm-tooltip-autocomplete ul li .cm-completionMatchedText': {
         textDecoration: 'none',
         color: h(palette.accent),
@@ -433,10 +390,7 @@ export function editorThemeExtensions(themeName: string): Extension[] {
         fontSize: '0.92em',
         opacity: '0.55',
       },
-      /*
-       * 列名多选勾选框（DOM 由 CodeEditor.vue 的 renderColumnCheckbox 提供）：
-       * 未勾选是空心方框，勾选后填品牌色并显示对勾。
-       */
+      /* 列名多选勾选框：未勾选空心方框，勾选后填品牌色并显示对勾 */
       '.cm-tooltip-autocomplete ul li .cm-sqlcheck': {
         display: 'inline-flex',
         alignItems: 'center',
@@ -466,44 +420,23 @@ export function editorThemeExtensions(themeName: string): Extension[] {
         fontSize: '0.72em',
         lineHeight: '1',
       },
-      /*
-       * 列候选的描述区（DOM 由 CodeEditor.vue 的 renderColumnDetail 提供）：
-       * 「类型 · 来源 · 注释」三段，靠间距分隔 —— 纯文本 detail 只能串成一串 `·`，
-       * 所以不用它。来源与注释各带一个小图标，**图标带颜色做标识**（见下）。
-       *
-       * 刻意**不做列对齐**（固定列宽的表格样式）：对齐要靠截断列名与注释换来，
-       * 还会让纯关键字列表无谓变宽 —— 三段顺次跟在列名后面更省空间，
-       * 「哪一段是什么」靠图标颜色区分就够了。
-       */
+      /* 列候选描述区：「类型 · 来源 · 注释」三段，来源与注释各带彩色图标 */
       '.cm-tooltip-autocomplete ul li .cm-column-detail': {
         display: 'inline-flex',
         alignItems: 'center',
-        // 空间不够时**换行**而不是被截断：CM 会按光标右侧的可用空间给弹层设一个
-        // 上限（窄窗口 / 光标靠右时更小），行放不下就会被 li 的 ellipsis 切掉尾巴
-        // ——「图标不见了」就是这么来的。允许折行后，最坏情况只是这一行变高。
+        // 放不下时折行，避免内容被截断
         flexWrap: 'wrap',
-        // tips 文本放开选择：复制类型 / 来源表 / 注释是高频动作
-        // （全局默认禁选，见 global.css 的 body 规则）
+        // tips 文本放开选择，便于复制类型 / 来源表 / 注释
         userSelect: 'text',
         gap: '0.7em',
         marginLeft: '1.1em',
         fontSize: '0.92em',
       },
-      /*
-       * 变淡的只有**文字**（类型 / 值），图标保持原色。
-       *
-       * 不能把 opacity 加在容器或 __part 上：透明度会连着图标一起压灰，
-       * 而且子元素无法「提亮」回来 —— 那样图标颜色就白给了。
-       */
+      /* 变淡的只有文字（类型 / 值），图标保持原色 */
       '.cm-tooltip-autocomplete ul li .cm-column-detail__type, .cm-tooltip-autocomplete ul li .cm-column-detail__value': {
         opacity: '0.75',
       },
-      /*
-       * 备注允许换行（最宽约 46 个字符）：治理标签那种长注释是常态，
-       * 与其被 ellipsis 截掉半句，不如让这一行高一点、把话说完。
-       * 宽度上限是必需的 —— 列表的 `white-space: nowrap` 在这里被改成 normal，
-       * 不给上限的话一行会无限长（整行跟着变宽）。
-       */
+      /* 备注允许换行（最宽约 46 字符），避免长注释被省略 */
       '.cm-tooltip-autocomplete ul li .cm-column-detail__part--comment .cm-column-detail__value': {
         minWidth: '0',
         maxWidth: '46ch',
@@ -527,10 +460,7 @@ export function editorThemeExtensions(themeName: string): Extension[] {
         // 同上：放不下时折行，别让内容消失
         flexWrap: 'wrap',
       },
-      /*
-       * 列类型原先硬编码等宽字体，结果补全列表里只有这一处字体和编辑器不一致。
-       * 改成 inherit：跟着 .cm-tooltip 上设置的编辑器字体走（见 CodeEditor 的 fontExtension）。
-       */
+      /* 列类型字体跟随编辑器，不用等宽字体 */
       '.cm-tooltip-autocomplete ul li .cm-column-detail__type': {
         fontFamily: 'inherit',
       },
@@ -542,11 +472,7 @@ export function editorThemeExtensions(themeName: string): Extension[] {
         width: '0.95em',
         height: '0.95em',
       },
-      /*
-       * 两个图标的颜色标识：
-       *  - 来源（血缘源头表名）用品牌色 —— 「这列来自哪张表」是最需要一眼扫到的信息；
-       *  - 注释用琥珀色 —— 与来源区分开，沿用日志 token 里的同一个暖色，配色统一。
-       */
+      /* 两个图标配色：来源用品牌色，注释用琥珀色 */
       '.cm-tooltip-autocomplete ul li .cm-column-detail__part--source .cm-column-detail__icon': {
         color: h(palette.accent),
       },
@@ -560,13 +486,7 @@ export function editorThemeExtensions(themeName: string): Extension[] {
       '.cm-tooltip-autocomplete ul li .cm-column-detail__part--comment .cm-column-detail__icon': {
         color: palette.dark ? '#fbbf24' : '#b45309',
       },
-      /*
-       * 候选类型图标（DOM 由 CodeEditor.vue 的 renderTypeIcon 提供）：
-       * **每个类型一种颜色** —— 列 / 表 / 别名 / 库 / 关键字 / 函数 / 属性 / 片段，
-       * 一眼分出「这是什么候选」，不必去读后面的类型文字。
-       * 色板沿用日志 token 那一套（同一个应用里的颜色语言保持一致），
-       * 深浅主题各取一档保证对比度；表名用主题的品牌色。
-       */
+      /* 候选类型图标：每个类型一种颜色，一眼分出这是什么候选 */
       '.cm-tooltip-autocomplete ul li .cm-type-icon': {
         display: 'inline-flex',
         alignItems: 'center',
@@ -611,10 +531,7 @@ export function editorThemeExtensions(themeName: string): Extension[] {
       '.cm-tooltip-autocomplete ul li .cm-type-icon--text': {
         color: palette.dark ? '#fbbf24' : '#b45309',
       },
-      /*
-       * 错误标记（模板语法校验等，装饰由 utils/editorErrors.ts 提供）：
-       * 底部红色波浪线，悬停显示消息（文案挂在 title 上，走全局提示代理）。
-       */
+      /* 错误标记：底部红色波浪线，悬停显示消息 */
       '.cm-error-mark': {
         textDecoration: `underline wavy ${palette.dark ? '#f87171' : '#dc2626'}`,
         // 下划线穿过下伸部（g / y 等），更接近 IDE 的波浪线观感
@@ -625,13 +542,7 @@ export function editorThemeExtensions(themeName: string): Extension[] {
         backgroundColor: h(palette.selection),
         outline: `1px solid ${h(palette.border)}`,
       },
-      /*
-       * 查找 / 替换面板与命中高亮（见 utils/editorSearch.ts）。
-       *
-       * 官方样式是浅色硬编码（白底、系统灰按钮、浅绿命中），深色主题下会整块糊在
-       * 编辑器上；这里按当前配色重写，与补全浮层同一套观感（widget 底 / border 边 /
-       * accent 强调）。
-       */
+      /* 查找 / 替换面板与命中高亮：按当前配色重写官方浅色样式 */
       '.cm-panel.cm-search': {
         backgroundColor: h(palette.widget),
         borderTop: `1px solid ${h(palette.border)}`,

@@ -1,22 +1,4 @@
-/**
- * 表别名 / CTE 名称重命名（Rename Session）。
- *
- * 设计要点（与产品文档一致）：
- *  - **只改声明处做预览**：进入重命名后用户编辑的只是声明那一段文本，
- *    其它引用在按 Enter 之前一动不动 —— 于是 Esc / 光标移出只需恢复声明；
- *  - **提交是一次 transaction**：所有引用按 from 倒序拼成 TextEdit[]，
- *    由编辑器一次性应用，Undo 里就是一步；
- *  - **不做字符串替换**：引用集合来自 `semantic/sqlSymbols` 的符号身份比对，
- *    字符串 / 注释 / 列别名 / 其它作用域的同名别名都不在内；
- *  - **身份用 sourceId + 声明范围**，不用显示文本 —— 同名别名到处都是。
- *
- * 两类对象共用一套会话（差别只在 kind 与文案）：表别名 `FROM users u` 的 `u`、
- * CTE 名字 `WITH recent AS (…)` 的 `recent` —— 它们的编辑动作完全同构：
- * 都是「一个标识符的声明 + 若干引用」，都按标识符规则校验与加引号。
- *
- * 本模块是纯函数：不依赖 CodeMirror 的 View / DOM，UI 层（CodeEditor）负责
- * 「装饰、按键、事务、取消」，逻辑与校验都在这里，便于单独验证。
- */
+/** 表别名 / CTE 名称重命名（Rename Session） */
 import type { TextRange } from '@/utils/sql/sqlSyntax'
 import { RESERVED_WORDS } from '../sqlCompletionKeywords'
 import { needsQuoting, renderIdent } from '../sqlCompletionInsert'
@@ -65,11 +47,7 @@ function quoteOf(text: string): string {
   return text === '`' || text === '"' || text === '[' ? text : ''
 }
 
-/**
- * 开始一次重命名会话。
- *
- * `doc` 用于记录初始文档（Esc 恢复）与识别原声明用的引号样式。
- */
+/** 开始一次重命名会话 */
 export function createRenameSession(
   symbol: RenameSymbol,
   references: TextRange[],
@@ -118,14 +96,7 @@ function unquotedOf(name: string): { name: string, quote: string } {
   return { name: trimmed.slice(1, -1), quote }
 }
 
-/**
- * 别名是否合法（按方言）。
- *
- * 允许两种写法：
- *  - 裸标识符：字母 / 下划线开头，由字母数字下划线组成；
- *  - 显式带引号：`` `order` `` / `"order"` / `[order]`（用户自己写了引号就尊重它，
- *    这也是文档里「不要直接 /^\w+$/ 一刀切」的落点）。
- */
+/** 别名是否合法（按方言） */
 export function isValidSqlIdentifier(name: string, dialect: SqlDialect): boolean {
   const trimmed = name.trim()
   if (!trimmed) {
@@ -143,11 +114,7 @@ export function isValidSqlIdentifier(name: string, dialect: SqlDialect): boolean
   return isPlainIdent(trimmed)
 }
 
-/**
- * 提示文案里怎么称呼被重命名的对象（措辞只在这一处）。
- *
- * @param full 校验提示用全称（别名 / CTE 名称）；成功提示用简称（表别名 / CTE）
- */
+/** 提示文案里怎么称呼被重命名的对象（措辞只在这一处） */
 export function renameSubjectOf(kind: SqlRenameKind, full = true): string {
   if (kind === 'cte') {
     return full ? 'CTE 名称' : 'CTE'
@@ -158,12 +125,7 @@ export function renameSubjectOf(kind: SqlRenameKind, full = true): string {
   return full ? '别名' : '表别名'
 }
 
-/**
- * 重命名的校验提示：返回 null 表示可以提交。
- *
- * 第一版只做「明显不合法 / 保留字」两类拦截，提示文案直接给到用户；
- * 主语按对象类型给（别名 / CTE 名称），不让用户读到「别名」却改的是 CTE。
- */
+/** 重命名的校验提示：返回 null 表示可以提交 */
 export function renameValidationMessage(
   name: string,
   dialect: SqlDialect,
@@ -182,11 +144,7 @@ export function renameValidationMessage(
     if (RESERVED_WORDS.has(inner.toLowerCase())) {
       return `「${inner}」是 SQL 保留字，换个名字，或手动加引号（如 \`${inner}\`）`
     }
-    /*
-     * 中文等 CJK 标识符：词法上就是合法标识符，只是「生成 SQL 时统一加引号」
-     * （见 sqlLexemes.ASCII_IDENT_RE 的说明）。用户裸写中文别名是常态，
-     * 提交时自然会被渲染成 `用户`，没必要拦下来让他自己去敲引号。
-     */
+    /* 中文等 CJK 标识符：词法上就是合法标识符 */
     if (isPlainIdent(inner)) {
       return null
     }
@@ -208,11 +166,7 @@ export function renamedIdentOf(session: SqlRenameSession, dialect: SqlDialect): 
   return renderIdent(name, dialect)
 }
 
-/**
- * 把新名字同步到「声明 + 所有引用」的文本修改列表。
- *
- * **按 from 倒序**：从后往前改，前面的范围不会因为后面的替换而偏移。
- */
+/** 把新名字同步到「声明 + 所有引用」的文本修改列表 */
 export function renameEdits(session: SqlRenameSession, dialect: SqlDialect): SqlTextEdit[] {
   const insert = renamedIdentOf(session, dialect)
   const ranges = [session.declarationRange, ...session.referenceRanges]
@@ -236,16 +190,7 @@ export interface RenameCommitPlan {
   selection: number
 }
 
-/**
- * 规划一次提交。
- *
- * `typedName` 是用户在重命名期间输入的新别名（也就是声明处当前的文本）。
- *
- * 注意修改范围用的是**原文长度**推出的声明范围：编辑器提交前会先把声明
- * 恢复成原文（见 sqlRenameView 的 commitRename），这样这组 edit 就是
- * 「原文 → 新名字」的完整一步，撤销一次即可全量还原。
- * 校验不通过时不产生任何 edit —— Enter 被拦下，界面给提示，会话继续。
- */
+/** 规划一次提交 */
 export function planRenameCommit(
   session: SqlRenameSession,
   typedName: string,
@@ -280,12 +225,7 @@ export interface RenameCancelPlan {
   selection: number
 }
 
-/**
- * 规划一次取消：把声明改回进入会话时的**原文**。
- *
- * 用原文而不是「按旧名字重新渲染」：引号样式、大小写都能逐字节还原，
- * Esc 的结果与进入前完全一致。
- */
+/** 规划一次取消：把声明改回进入会话时的**原文** */
 export function planRenameCancel(session: SqlRenameSession, doc: string): RenameCancelPlan {
   const current = doc.slice(session.declarationRange.from, session.declarationRange.to)
   return {

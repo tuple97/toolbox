@@ -136,12 +136,7 @@ func (m *Manager) Preview(ctx context.Context, inputs []PackageInput, opts Previ
 		return nil, fmt.Errorf("%w: 离线模式下不能从插件市场安装", ErrSourceUnavailable)
 	}
 
-	/*
-	 * 一次安装可能横跨多个来源：根插件来自用户点选的来源，依赖则可能在别的
-	 * 来源里。因此这里把全部已启用来源的索引（命中缓存就不打网络）都取来，
-	 * 交给挑选与求解统一使用 —— 否则「A 源的主包依赖 B 源的依赖」这类组合
-	 * 会在求解阶段莫名其妙地报「依赖缺失」。
-	 */
+	/* 一次安装可能横跨多个来源：根插件来自用户点选的来源，依赖则可能在别的 来源里 */
 	var views []sourceIndexView
 	if needIndex {
 		explicit := make([]string, 0, len(inputs))
@@ -167,6 +162,11 @@ func (m *Manager) Preview(ctx context.Context, inputs []PackageInput, opts Previ
 			}
 			return nil, fmt.Errorf("%w: 插件索引不可用", ErrSourceUnavailable)
 		}
+	}
+
+	/* 选中的是「容器目录」（项目根 / plugins 目录，下一层才是插件）时 */
+	if container := localContainerOf(inputs); container != nil {
+		return &InstallPreview{Container: container}, nil
 	}
 
 	loaded, err := m.loadInputs(inputs, views)
@@ -259,6 +259,11 @@ func (m *Manager) Preview(ctx context.Context, inputs []PackageInput, opts Previ
 		// origin.Official 已与来源验签结果取过与；再传一次 Verified 是为了复用
 		// DecideTrust 的判定分支（official 为真时必然已验签，不会落到「声明官方但无法验证」）
 		decision := DecideTrust(origin.Official, origin.Verified, m.alreadyTrusted(mf.ID, origin.Checksum))
+		/* 开发者模式不检测可信：这个开关的用途就是反复装自己正在改的插件 */
+		if m.devMode.Load() {
+			decision.NeedPrompt = false
+			decision.Reason = ""
+		}
 		entry.decisions[mf.ID] = decision
 		item.NeedTrust = decision.NeedPrompt
 		item.TrustReason = decision.Reason
@@ -304,7 +309,8 @@ func (m *Manager) Preview(ctx context.Context, inputs []PackageInput, opts Previ
 			unverified++
 		}
 	}
-	if unverified > 0 {
+	// 开发者模式本来就跳过可信校验，这条警告只会变成永远关不掉的噪音
+	if unverified > 0 && !m.devMode.Load() {
 		entry.warnings = append(entry.warnings, fmt.Sprintf(
 			"本次将安装 %d 个未经官方索引签名验证的插件，请确认你信任它们的来源。", unverified))
 	}
@@ -388,6 +394,8 @@ func (m *Manager) InstallPlan(ctx context.Context, planID string, trust, acceptP
 	}()
 
 	var changed []string
+	// 改成引用式后要删掉的资源目录旧副本（提交成功后再删）
+	var droppedDirs []string
 	for _, item := range entry.items {
 		if item.Action == ActionKeep {
 			continue
@@ -395,6 +403,48 @@ func (m *Manager) InstallPlan(ctx context.Context, planID string, trust, acceptP
 		mf := entry.resolution.Selected[item.ID]
 		if mf == nil {
 			return fmt.Errorf("内部错误：计划项 %s 缺少清单", item.ID)
+		}
+
+		/* 开发者模式的源码目录：直接引用用户的目录，不复制进资源目录 */
+		if origin := entry.origins[item.ID]; origin.Kind == KindLocalDir && strings.TrimSpace(origin.Dir) != "" {
+			inner, err := LoadManifest(origin.Dir)
+			if err != nil {
+				return fmt.Errorf("%w: 读取源码目录清单失败(%s): %v", ErrInvalidPackage, item.ID, err)
+			}
+			if inner.ID != item.ID || inner.Version != item.Version {
+				return fmt.Errorf("%w: 源码目录内容与计划不一致：计划 %s@%s，实际 %s@%s",
+					ErrInvalidPackage, item.ID, item.Version, inner.ID, inner.Version)
+			}
+			if err := validateEntries(origin.Dir, inner); err != nil {
+				return err
+			}
+			rec, err := m.buildRecord(item, inner, oldRecords[item.ID])
+			if err != nil {
+				return err
+			}
+			rec.LocalDir = origin.Dir
+			rec.PreviousVersion = ""
+			newRecord, err := json.MarshalIndent(rec, "", "  ")
+			if err != nil {
+				return err
+			}
+			// 不建暂存目录、不写目标目录：这一次安装只落一条记录
+			tx.AddOp(txOp{
+				ID:         item.ID,
+				Version:    item.Version,
+				Action:     item.Action,
+				RecordPath: m.store.RecordPath(item.ID),
+				NewRecord:  newRecord,
+				OldRecord:  oldRecords[item.ID],
+				HadRecord:  len(oldRecords[item.ID]) > 0,
+				NewPlugin:  len(oldRecords[item.ID]) == 0,
+			})
+			// 之前按复制方式装过的话，资源目录里还留着一份副本，提交成功后清掉
+			if m.store.HasVersion(item.ID, item.Version) {
+				droppedDirs = append(droppedDirs, m.store.VersionDir(item.ID, item.Version))
+			}
+			changed = append(changed, item.ID)
+			continue
 		}
 
 		staging, err := tx.StagingVersionDir(item.ID, item.Version)
@@ -468,6 +518,13 @@ func (m *Manager) InstallPlan(ctx context.Context, planID string, trust, acceptP
 	}
 	committed = true
 
+	// 引用式安装不再需要资源目录里的副本：删掉它（它只是一份拷贝，不是用户的源码）
+	for _, dir := range droppedDirs {
+		if err := os.RemoveAll(dir); err != nil {
+			slog.Warn("清理插件旧副本失败", "dir", dir, "error", err)
+		}
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.reloadLocked(ctx); err != nil {
@@ -480,6 +537,10 @@ func (m *Manager) InstallPlan(ctx context.Context, planID string, trust, acceptP
 			continue
 		}
 		rec := m.records[item.ID]
+		// 源码目录插件在资源目录里没有版本目录，也没有可回滚的版本
+		if rec != nil && strings.TrimSpace(rec.LocalDir) != "" {
+			continue
+		}
 		protect := []string{item.Version}
 		if rec != nil && rec.PreviousVersion != "" {
 			protect = append(protect, rec.PreviousVersion)
@@ -661,6 +722,78 @@ type loadedInput struct {
 	origin   Origin
 }
 
+// localContainerOf 找出输入里的「容器目录」。
+//
+// 容器目录 = 自身没有 manifest.json、下面却能找到插件子目录的目录，两种布局都算：
+//   - 插件集合目录（<dir>/<插件>/manifest.json）
+//   - 插件仓库根目录（<dir>/plugins/<插件>/manifest.json）
+//
+// 命中时交给界面去登记成本地插件源；没命中返回 nil，
+// 由 loadInput 去报它自己的错（例如目录里确实一个插件都没有）。
+func localContainerOf(inputs []PackageInput) *LocalContainer {
+	for _, in := range inputs {
+		source := strings.ToLower(strings.TrimSpace(in.Source))
+		if source != SourceLocalDir && source != SourceFile {
+			continue
+		}
+		dir := strings.TrimSpace(in.Ref)
+		if dir == "" {
+			continue
+		}
+		info, err := os.Stat(dir)
+		if err != nil || !info.IsDir() || hasManifestFile(dir) {
+			continue
+		}
+		subs := collectPluginDirs(dir)
+		if len(subs) == 0 {
+			continue
+		}
+		return &LocalContainer{Path: dir, Count: len(subs)}
+	}
+	return nil
+}
+
+// collectPluginDirs 找出目录下的插件子目录，返回绝对路径列表。
+//
+// 支持两种布局：
+//   - 目录本身就是插件集合（<dir>/<插件>/manifest.json）
+//   - 插件仓库根目录（<dir>/plugins/<插件>/manifest.json）
+func collectPluginDirs(dir string) []string {
+	if names := subPluginDirs(dir); len(names) > 0 {
+		out := make([]string, 0, len(names))
+		for _, name := range names {
+			out = append(out, filepath.Join(dir, name))
+		}
+		return out
+	}
+	pluginsDir := filepath.Join(dir, "plugins")
+	if names := subPluginDirs(pluginsDir); len(names) > 0 {
+		out := make([]string, 0, len(names))
+		for _, name := range names {
+			out = append(out, filepath.Join(pluginsDir, name))
+		}
+		return out
+	}
+	return nil
+}
+
+// hasManifestFile 报告目录里是否有插件清单。
+func hasManifestFile(dir string) bool {
+	info, err := os.Stat(filepath.Join(dir, ManifestFileName))
+	return err == nil && !info.IsDir()
+}
+
+// requireDevMode 校验开发者模式；未开启时返回可直接展示给用户的错误。
+//
+// 源码目录既没有摘要也没有签名，只能靠「用户自己写的代码」这层信任，
+// 因此把它锁在开发者模式后面，默认安装路径只接受已编译产物。
+func (m *Manager) requireDevMode(action string) error {
+	if m.devMode.Load() {
+		return nil
+	}
+	return fmt.Errorf("%w: %s需要先开启「开发者模式」（设置 → 高级）", ErrPermissionDenied, action)
+}
+
 // loadInputs 读取并校验全部输入包。
 func (m *Manager) loadInputs(inputs []PackageInput, views []sourceIndexView) ([]*loadedInput, error) {
 	out := make([]*loadedInput, 0, len(inputs))
@@ -688,6 +821,19 @@ func (m *Manager) loadInput(in PackageInput, views []sourceIndexView) (*loadedIn
 		if err != nil {
 			return nil, err
 		}
+		/* 本地目录源的条目直接指向一个插件目录（Download = file://…）， 按源码目录安装处理：没有安装包可下载 */
+		if isLocalSourceURL(entry.Download) {
+			local, loadErr := m.loadLocalDir(PackageInput{
+				Source: SourceLocalDir,
+				Ref:    localSourceDir(entry.Download),
+			})
+			if loadErr != nil {
+				return nil, loadErr
+			}
+			local.input = in
+			return local, nil
+		}
+
 		mf := entry.Manifest()
 		origin := Origin{
 			Kind:     KindRegistry,
@@ -723,7 +869,10 @@ func (m *Manager) loadInput(in PackageInput, views []sourceIndexView) (*loadedIn
 			return nil, fmt.Errorf("%w: 读取安装包失败: %v", ErrSourceUnavailable, err)
 		}
 		if info.IsDir() {
-			// 目录按本地开发目录处理，便于开发者直接指向源码目录
+			/* 选中目录 = 源码目录安装 */
+			if err := m.requireDevMode("从源码目录安装"); err != nil {
+				return nil, err
+			}
 			return m.loadLocalDir(PackageInput{Source: SourceLocalDir, Ref: path})
 		}
 		if info.Size() > maxPackageBytes {
@@ -736,6 +885,9 @@ func (m *Manager) loadInput(in PackageInput, views []sourceIndexView) (*loadedIn
 		return m.loadPayload(in, KindFile, path, payload)
 
 	case SourceLocalDir:
+		if err := m.requireDevMode("从源码目录安装"); err != nil {
+			return nil, err
+		}
 		return m.loadLocalDir(in)
 
 	case SourceArchive:
@@ -892,14 +1044,7 @@ func (m *Manager) buildCatalog(loaded []*loadedInput, views []sourceIndexView, o
 				origin.CachePath = path
 			}
 			if err := catalog.Add(entry.Manifest(), origin); err != nil {
-				/*
-				 * 同一个 (id, version) 被两个来源提供但摘要不一致。
-				 *
-				 * 这是来源之间的分歧，不是本插件的安装错误：先登记的来源胜出，
-				 * 冲突项跳过。绝不能因为「用户同时挂了两个源」就让整次安装失败，
-				 * 也不该在这里替用户决定谁是对的 —— 实际安装的内容仍按选中来源
-				 * 自己的摘要校验。
-				 */
+				/* 同一个 (id, version) 被两个来源提供但摘要不一致 */
 				slog.Warn("跳过与其它来源冲突的索引条目",
 					"id", entry.ID, "version", entry.Version, "source", view.Source.URL, "error", err)
 			}
@@ -1067,12 +1212,7 @@ func (m *Manager) Uninstall(ctx context.Context, id string, force bool) ([]strin
 			ErrInUse, id, strings.Join(dependents, "、"))
 	}
 
-	/*
-	 * 强制卸载：先把依赖方全部停用，再删被卸载的插件。
-	 *
-	 * 顺序不能反 —— 先删掉被依赖的插件，依赖方立刻处于「依赖缺失」的
-	 * 坏状态。停用是一个有记录的显式状态，用户把依赖装回来后自己启用即可。
-	 */
+	/* 强制卸载：先把依赖方全部停用，再删被卸载的插件 */
 	disabled := make([]string, 0, len(dependents))
 	var ops []txOp
 	for _, depID := range dependents {

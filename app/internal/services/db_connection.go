@@ -15,13 +15,7 @@ import (
 	"toolbox/app/internal/database"
 )
 
-/*
- * 数据库连接的建立与管理：增删改查、连通性测试、DSN 构造。
- *
- * 从 db_service.go 拆出来的原因：那边是「连上以后怎么查」的执行链路
- * （模板渲染、分页、结果加工），这边只回答「怎么连上」——
- * 两者合在一起时文件太长，改连接参数要在千行里翻找。
- */
+/* 数据库连接的建立与管理：增删改查、连通性测试、DSN 构造 */
 
 // 连接参数的默认值（与 database.DBConnection 的注释保持一致）
 const (
@@ -66,11 +60,7 @@ func (s *DBService) TestConnection(conn database.DBConnection) error {
 
 // SaveConnection 加密密码后保存连接配置。
 func (s *DBService) SaveConnection(conn database.DBConnection) (int64, error) {
-	/*
-	 * 不能只看 `enc:` 前缀判断「是否已加密」：
-	 * 用户密码恰好以 enc:v1: 开头时会被当成密文跳过加密，明文直接落库，
-	 * 读取时又会按密文去解码。EncryptIfNeeded 以「能解的开」为准。
-	 */
+	/* 不能只看 `enc:` 前缀判断「是否已加密」： 用户密码恰好以 enc:v1: 开头时会被当成密文跳过加密 */
 	encrypted, err := s.cipher.EncryptIfNeeded(conn.Password)
 	if err != nil {
 		return 0, fmt.Errorf("密码加密失败: %w", err)
@@ -158,11 +148,7 @@ func buildDSN(conn database.DBConnection, password string) (string, string, erro
 			params.Set("tls", tlsMode)
 		}
 		applyExtraParams(params, conn.URLParams)
-		/*
-		 * 用驱动自己的 Config 拼 DSN，而不是字符串格式化：
-		 * 密码里出现 @ : / ? 这类字符（很常见）时，拼接的 DSN 会被解析成
-		 * 错误的 host 或直接解析失败，FormatDSN 会做正确的转义。
-		 */
+		/* 用驱动自己的 Config 拼 DSN，而不是字符串格式化： 密码里出现 @ : / ? 这类字符（很常见）时 */
 		cfg := mysql.NewConfig()
 		cfg.User = conn.Username
 		cfg.Passwd = password

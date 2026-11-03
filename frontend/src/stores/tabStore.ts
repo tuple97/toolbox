@@ -10,30 +10,15 @@ const SAVE_DEBOUNCE_MS = 1000
 /** 新建 Tab 的默认名称前缀 */
 const DEFAULT_TAB_NAME = '新建标签'
 
-/**
- * 没有标签可展示时的落脚点（应用刚启动、标签全被关掉）。
- *
- * 指向插件管理：它是平台自身的入口，比留一片空白更有意义。
- */
+/** 没有标签可展示时的落脚点：指向插件管理单例 */
 const DEFAULT_SINGLETON: ToolType = 'plugins'
 
 export const useTabStore = defineStore('tabs', () => {
-  /**
-   * 标签列表，顺序即为展示顺序。
-   *
-   * **只装多例工具**：单例工具（插件管理 / 设置 / 连接管理 / SQL 模板 / 词典）
-   * 不进标签栏，改为内容区的「单例视图」，见 `activeSingleton`。
-   */
+  /** 标签列表，顺序即展示顺序；只装多例工具，单例工具走 `activeSingleton` */
   const tabs = ref<WorkbenchTab[]>([])
   /** 当前激活的 Tab ID */
   const activeId = ref<number | null>(null)
-  /**
-   * 当前展示的单例视图（工具类型）。
-   *
-   * 与 `activeId` **互斥**：内容区同一时刻要么展示某个单例视图、要么展示激活标签，
-   * 所以激活标签时会清掉它、打开单例视图时会清掉 activeId。
-   * 默认落到插件管理：应用刚启动、标签全关掉时都有落脚点，不留空白。
-   */
+  /** 当前展示的单例视图，与 `activeId` 互斥 */
   const activeSingleton = ref<ToolType | null>(DEFAULT_SINGLETON)
   /** 是否已完成首次加载 */
   const loaded = ref(false)
@@ -59,10 +44,7 @@ export const useTabStore = defineStore('tabs', () => {
 
   // ------------------------------------------------------------ 持久化
 
-  /**
-   * 规范化待保存数据：
-   * 顺序即为 sortOrder，激活态以 activeId 为准。
-   */
+  /** 规范化待保存数据（顺序即 sortOrder） */
   function snapshot(): WorkbenchTab[] {
     return tabs.value.map((tab, index) => ({
       ...tab,
@@ -71,17 +53,7 @@ export const useTabStore = defineStore('tabs', () => {
     }))
   }
 
-  /**
-   * 立即保存（用于退出兜底与手动触发）。
-   *
-   * 后端会重新分配 ID（本地新建的标签为负数占位 ID），
-   * 因此保存后需把返回值同步回本地，并把 activeId 映射到新 ID，
-   * 否则后续操作会指向一个不存在的标签。
-   *
-   * 注意：只在 ID 真正发生变化时才替换本地数组。
-   * 无条件替换会让 tabs 数组整体换引用，进而触发依赖它的组件重渲染，
-   * 与「渲染 → 保存」形成循环。
-   */
+  /** 立即保存，并把后端重新分配的 ID 同步回本地 */
   async function saveNow(): Promise<void> {
     if (saveTimer !== null) {
       window.clearTimeout(saveTimer)
@@ -139,14 +111,7 @@ export const useTabStore = defineStore('tabs', () => {
   async function load(): Promise<void> {
     try {
       const list = await fetchTabs()
-      /*
-       * 过滤规则：
-       *   - 内置单例工具不走标签，历史库里可能还留着它们的记录，剔除；
-       *   - 未绑定功能的空白标签同样剔除；
-       *   - 注册表里查不到的类型一律**保留**：它可能是尚未加载的插件工具。
-       *     插件宿主是异步加载的，若按「查不到就删」处理，
-       *     每次启动都会把插件标签清掉（加载时序早于插件注册）。
-       */
+      // 过滤掉单例工具标签与空白标签，未知类型保留
       const multiOnly = list.filter((tab) => {
         if (tab.toolType === 'placeholder') {
           return false
@@ -193,10 +158,7 @@ export const useTabStore = defineStore('tabs', () => {
     return tab
   }
 
-  /**
-   * 关闭 Tab。
-   * 锁定状态下禁止关闭，避免误操作丢失配置。
-   */
+  /** 关闭 Tab；锁定状态下禁止关闭 */
   function closeTab(id: number, options: { force?: boolean } = {}): boolean {
     const index = tabs.value.findIndex(tab => tab.id === id)
     if (index < 0) {
@@ -281,15 +243,7 @@ export const useTabStore = defineStore('tabs', () => {
     scheduleSave()
   }
 
-  /**
-   * 打开工具。
-   *
-   * 单例工具：**不建标签**，直接把内容区切到它的单例视图（再点只是切回去），返回 null；
-   * 多例工具：每次调用新建一个实例标签并激活（侧边栏的 +、标签栏的 +、快捷入口都走这里）。
-   *
-   * @param type 工具类型
-   * @param options.newInstance 强制新建（多例工具右键/下拉新建时使用）
-   */
+  /** 打开工具：单例工具切到单例视图，多例工具新建标签 */
   function openTool(type: ToolType, options: { newInstance?: boolean } = {}): WorkbenchTab | null {
     const definition = toolOf(type)
 
@@ -315,10 +269,7 @@ export const useTabStore = defineStore('tabs', () => {
     }
   }
 
-  /**
-   * 为 Tab 绑定工具。
-   * 依据 PRD：工具一旦选定即永久绑定，不支持再切换。
-   */
+  /** 为 Tab 绑定工具；工具一旦选定即永久绑定 */
   function bindTool(id: number, toolType: ToolType): boolean {
     const tab = tabs.value.find(item => item.id === id)
     if (!tab || tab.toolType !== 'placeholder') {
@@ -329,10 +280,7 @@ export const useTabStore = defineStore('tabs', () => {
     return true
   }
 
-  /**
-   * 更新 Tab 的 payload（工具内部状态）。
-   * 内容未变化时不赋值也不排保存，避免触发无意义的响应式更新与落盘。
-   */
+  /** 更新 Tab 的 payload；内容未变化时不赋值也不排保存 */
   function updatePayload(id: number, payload: unknown): void {
     const tab = tabs.value.find(item => item.id === id)
     if (!tab) {

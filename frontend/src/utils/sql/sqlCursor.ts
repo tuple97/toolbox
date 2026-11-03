@@ -1,26 +1,4 @@
-/**
- * SQL 光标的语义分析（文本层）。
- *
- * 这里回答 SQL 侧的「我在哪」：**哪条语句 / 哪个子句 / 什么位置类别 / 正在输入什么**。
- * 与补全主模块的关系：
- *
- * ```
- *   analyzeHybridCursor   语言区域（模板 / 脚本 / 字符串注释 / SQL）
- *         ↓
- *   analyzeSqlCursorText  语句 + 子句 + 位置类别 + 前缀（本文件，纯文本、可廉价调用）
- *         ↓
- *   SqlCursorIntent       再加作用域链（表 / 别名 / CTE，由补全主模块填）
- *         ↓
- *   候选生成              generalSuggestions / smartSuggestions / 点号补全 …
- * ```
- *
- * 之所以分两层：位置判定要在**每次按键**时跑（触发策略），不能查元数据；
- * 而候选生成需要作用域。上面的文本层两种场景共用，口径不会分叉。
- *
- * 子句判定用「同一语句内的反向扫描」而不是完整语法树：补全时语句十有八九
- * 还没写完（正打到 `where u.`），严格 parser 会直接失败，而这里只需要回答
- * 「最近的、同层级的子句关键字是哪个」。
- */
+/** SQL 光标的语义分析（文本层） */
 import type { EditorState } from '@codemirror/state'
 import { normalizeSqlScanDialect, splitSqlStatements } from '@/utils/sql/sqlStatementRanges'
 import type { TextRange } from '@/utils/sql/sqlSyntax'
@@ -55,17 +33,7 @@ export type CompletionContextKind =
   /** 无（日志等不补全的编辑器） */
   | 'none'
 
-/**
- * 补全所处位置的候选类型（子句视角）。
- *
- *  - `source`：**表名还没写**（`FROM |`、`JOIN |`、`INTO |`、`FROM t, |`）→ 只给表与库；
- *  - `afterSource`：表来源已写（`FROM t |`、`AS t1 |`）→ 表 + 库 + 连接 / 子句关键字；
- *  - `column`：表达式位置（SELECT / WHERE / ON / SET / BY / 函数参数…）
- *    → 列 + 别名 + 函数 + 关键字；
- *  - `alias`：别名位置（`… AS |`）→ **什么也不给**：这里只能写别名，
- *    列名、函数、关键字全是噪音；
- *  - `any`：判断不出（语句开头、空行）→ 表 + 库 + 全量关键字（含 DDL）。
- */
+/** 补全所处位置的候选类型（子句视角） */
 export type ClauseKind = 'source' | 'afterSource' | 'column' | 'alias' | 'any'
 
 /** 「后面接表」的子句关键字 */
@@ -74,59 +42,27 @@ const TABLE_CLAUSE_KEYWORDS = new Set([
   'use', 'database', 'schema', 'rename', 'analyze', 'optimize', 'repair',
 ])
 
-/**
- * 「后面接列 / 表达式」的子句关键字。
- * `desc` / `limit` / `offset` 故意不收：它们后面接的是值或者别的关键字，
- * 而且 `order by x desc` 收尾时反向扫描还要继续往左找 BY，才能判成列位置。
- */
+/** 「后面接列 / 表达式」的子句关键字 */
 const COLUMN_CLAUSE_KEYWORDS = new Set([
   'select', 'where', 'on', 'and', 'or', 'set', 'by', 'having', 'using',
   'when', 'then', 'else', 'case', 'like', 'in', 'between', 'is', 'not',
   'distinct', 'returning', 'values', 'as', 'order', 'group',
 ])
 
-/**
- * 反向扫描出的子句结论。
- *
- * 除位置类别外还带上「命中的关键字」与「它左边那个关键字」：
- * 位置细分（关联条件 / 分组 / INSERT 列清单）要靠这两个词区分，
- * 而它们本来就是同一次扫描读出来的，没必要再扫一遍。
- */
+/** 反向扫描出的子句结论 */
 export interface ClauseScan {
   kind: ClauseKind
   /** 命中的关键字（小写）；未命中为空串 */
   keyword: string
   /** 命中关键字左边的那个词（如 `GROUP BY` 的 group、`o.user_id` 的 o） */
   previousKeyword: string
-  /**
-   * 命中关键字之后、到光标之间的文本（已 trim）。
-   *
-   * 判断「这里是不是刚开了个头」用：`ON |` 还空着（该写整条条件），
-   * `ON o.user_id = |` 已经在表达式里了（只该给列）。
-   */
+  /** 命中关键字之后、到光标之间的文本（已 trim） */
   tail: string
-  /**
-   * 光标是否**紧贴刚读到的那个词**（`FROM|` 对 `FROM |`）。
-   *
-   * 紧贴说明用户还在写这个词，位置语义还没进入「关键字之后的那个槽位」——
-   * 上层据此收窄候选（明细见 `TightKind`）。
-   */
+  /** 光标是否**紧贴刚读到的那个词**（`FROM|` 对 `FROM |`） */
   tight: TightKind
 }
 
-/**
- * 「紧贴」的三种情形。
- *
- * - `'none'`：不紧贴（`FROM |`）—— 空位就是下一个槽位，表 / 库都该给；
- * - `'keyword'`：紧贴的就是命中的关键字（`FROM|`、`INTO|`）—— 表和库都不该给，
- *   否则 `FROM|` 的 pattern 会把长库名当子序列匹配上、再由高 boost 顶到第一位；
- * - `'name'`：紧贴的词被当成「正在输入的名字」让过（`FROM ord|` 的 `ord`）——
- *   表名与库名候选正是用户要的（`orders` / `order_center`），照给。
- *
- * 注意 `'name'` 的判据是**词本身的身份**（不在关键字词表里），不是它长什么样：
- * 任何非关键字的词紧贴光标时都是「正在输入的名字」，因此 `FROM d|`、`FROM ord|`、
- * `FROM user|` 与曾经的 `FROM or|` 走的是同一条路 —— 不再依赖「恰好是个关键字」。
- */
+/** 「紧贴」的三种情形 */
 export type TightKind = 'none' | 'keyword' | 'name'
 
 /** 判断光标处属于哪个子句 */
@@ -198,12 +134,7 @@ export function scanClause(prefix: string): ClauseScan {
     if (word) {
       const lower = word.text.toLowerCase()
       if (depth === 0) {
-        /*
-         * 紧贴光标的词，左边紧邻点号 ⇒ 它一定是限定名的一部分，不可能是关键字：
-         * `SELECT * FROM `test`.use|` 里的 `use` 是表名开头，不是 USE 语句关键字。
-         * 先按「正在输入的名字」让过它，再继续往左找真正的子句关键字 ——
-         * 不这样做的话 `use` / `order` / `as` 这类关键字开头的表名会整批没有候选。
-         */
+        /* 紧贴光标的词，左边紧邻点号 ⇒ 它一定是限定名的一部分 */
         if (index === prefix.length && prefix[index - 1] === '.') {
           skippedName = true
           skippedNameStart = word.start
@@ -215,11 +146,7 @@ export function scanClause(prefix: string): ClauseScan {
         if (enteredParen && (lower === 'into' || lower === 'update' || lower === 'table')) {
           return result('column', lower)
         }
-        /*
-         * `AS` 之后就是别名本身（表别名 / 列别名）：
-         * 光标还在 `AS |` 时不该弹任何候选；
-         * 别名已经写完（`AS t1 |`）则回到「表之后」，接下来是 JOIN / WHERE 这些子句关键字。
-         */
+        /* `AS` 之后就是别名本身（表别名 / 列别名）： 光标还在 `AS |` 时不该弹任何候选 */
         if (lower === 'as') {
           // `AS|` 紧贴：这个词还没写完，位置也没进入别名之后
           return result(
@@ -229,10 +156,7 @@ export function scanClause(prefix: string): ClauseScan {
             index === prefix.length ? 'keyword' : 'none',
           )
         }
-        /*
-         * BY 是两词结构的后半截（GROUP BY / ORDER BY），命中时前半截还没读到：
-         * 再往左读一个词填进 previousKeyword —— 位置细分才能把「分组」认出来。
-         */
+        /* BY 是两词结构的后半截（GROUP BY / ORDER BY） */
         if (lower === 'by') {
           let head = word.start
           while (head > 0 && /\s/.test(prefix[head - 1] ?? '')) {
@@ -246,28 +170,12 @@ export function scanClause(prefix: string): ClauseScan {
           return result('column', lower, index, index === prefix.length ? 'keyword' : 'none')
         }
         if (TABLE_CLAUSE_KEYWORDS.has(lower)) {
-          /*
-           * 表位置再细分：关键字到光标之间有没有内容，决定了「表还没写」还是「已写了表」。
-           * `FROM |` → source（只给表/库）；`FROM t |` → afterSource（再给 JOIN/WHERE 等关键字）；
-           * `FROM t, |` → 逗号后面又该接表名，回到 source。
-           */
-          /*
-           * tail 要排除「正在输入的那个词」：`FROM or|` 里 `or` 是没写完的表名，
-           * 它不是「已写好的来源」。不排除的话这里会判成 afterSource，
-           * 于是表名候选整批消失（资格过滤后一条不剩）。
-           */
+          /* 表位置再细分：关键字到光标之间有没有内容，决定了「表还没写」还是「已写了表」 */
+          /* tail 要排除「正在输入的那个词」：`FROM or|` 里 `or` 是没写完的表名， 它不是「已写好的来源」 */
           const tail = prefix.slice(index, skippedName ? skippedNameStart : prefix.length).trim()
-          /*
-           * `FROM|`（紧贴，还没敲空格）与 `FROM |` 位置不同：
-           * 前者还在写这个词，表 / 库都不该给；后者才是「该写表名」的空位。
-           */
+          /* `FROM|`（紧贴，还没敲空格）与 `FROM |` 位置不同： 前者还在写这个词，表 / 库都不该给 */
           const tight: TightKind = index === prefix.length ? 'keyword' : 'none'
-          /*
-           * 还在写来源的三种情形：什么都没写、刚敲了逗号（接着写下一个来源）、
-           * 以及**限定名写到一半**（`FROM mysql.` —— 库名写了，表名还没写）。
-           * 最后一种不能算「来源已完成」，否则槽位会按 afterSource 只给关键字，
-           * 表名候选整批消失。
-           */
+          /* 还在写来源的三种情形：什么都没写、刚敲了逗号（接着写下一个来源）、 以及**限定名写到一半**（`FROM mysql. */
           if (!tail || tail.endsWith(',') || tail.endsWith('.')) {
             return result('source', lower, index, tight)
           }
@@ -277,16 +185,7 @@ export function scanClause(prefix: string): ClauseScan {
           return result('afterSource', lower, index, tight)
         }
         if (COLUMN_CLAUSE_KEYWORDS.has(lower)) {
-          /*
-           * 贴住光标的词，只有「左边明确是名字位置」时才当作**还没写完的名字**：
-           *
-           *   SELECT * FROM or|   → 左边是 `from`（表位置）⇒ `or` 其实是 orders
-           *   SELECT * FROM users WHERE|  → 左边是表名 ⇒ 这就是 WHERE 关键字本身
-           *   SELECT CASE|        → 左边是 SELECT（表达式位置）⇒ 关键字本身
-           *
-           * 只有前一种情况让步（跳过它继续往左找真正的子句关键字）。
-           * 反例曾经踩过：一刀切「紧贴光标就不算关键字」会把 `WHERE|` 判成表位置。
-           */
+          /* 贴住光标的词，只有「左边明确是名字位置」时才当作**还没写完的名字**： SELECT * FROM or| → 左边是 */
           if (index === prefix.length && previousIsTableClauseKeyword(prefix, word.start)) {
             skippedName = true
             skippedNameStart = word.start
@@ -296,19 +195,7 @@ export function scanClause(prefix: string): ClauseScan {
           }
           return result('column', lower)
         }
-        /*
-         * 走到这里只可能是一种情况：这个词**不在关键字词表里**，于是它只能是
-         * 正在输入的标识符（表名 / 列名 / 别名 / 库名）。
-         *
-         * 位置语义由关键字给出，不由内容给出 —— 所以让过它、继续往左找子句关键字：
-         *
-         *   `SELECT * FROM d|`        → 让过 `d`，命中 FROM ⇒ 仍是**表位置**（给表名）
-         *   `SELECT * FROM user|`     → 同上（`user` 是需要引用符的保留字，但不是关键字）
-         *   `SELECT * FROM db.tab|`   → 让过 `tab`，tail 只剩 `db.` ⇒ 仍是表位置
-         *
-         * 只有**紧贴光标**才让过：`FROM users |` 里 users 后面已落空格，
-         * 那是个写完的来源，位置确实是「表之后」。
-         */
+        /* 走到这里只可能是一种情况：这个词**不在关键字词表里** */
         if (index === prefix.length && !KEYWORD_WORDS.has(lower)) {
           skippedName = true
           skippedNameStart = word.start
@@ -329,11 +216,7 @@ export function scanClause(prefix: string): ClauseScan {
   return result(enteredParen ? 'column' : 'any')
 }
 
-/**
- * 紧贴光标的关键字，左边是不是「表位置关键字」（from / join / into / update…）。
- *
- * 用来区分 `FROM or|`（`or` 是还没写完的表名）与 `WHERE|`（`where` 就是关键字）。
- */
+/** 紧贴光标的关键字，左边是不是「表位置关键字」（from / join / into / update…） */
 function previousIsTableClauseKeyword(prefix: string, before: number): boolean {
   let head = before
   while (head > 0 && /\s/.test(prefix[head - 1] ?? '')) {
@@ -373,16 +256,7 @@ export function skipQuotedBackward(text: string, index: number): number {
   return 0
 }
 
-/**
- * 光标所在（可能还没写完）语句中，光标之前的文本。
- *
- * 起点由语句范围给出（`completionStatementContext`）：
- * 光标停在语句末尾空白或新起一行时也算这条语句，否则会从头把
- * **上一条语句**的子句当成上下文（在 FROM 后面之后接着弹列名）。
- *
- * 拿不到范围时返回空串 —— 不能退回「按最后一个分号切」：没写分号的脚本
- * 会因此把整篇文档当成当前语句的上下文。
- */
+/** 光标所在（可能还没写完）语句中，光标之前的文本 */
 export function currentClausePrefix(doc: string, pos: number, range: TextRange | null): string {
   if (!range) {
     return ''
@@ -390,13 +264,7 @@ export function currentClausePrefix(doc: string, pos: number, range: TextRange |
   return doc.slice(Math.max(0, range.from), pos)
 }
 
-/**
- * 补全口径的语句边界类别。
- *
- * 「光标属于哪条语句」有两个容易混淆的答案，这里显式区分：
- *  - 语句**之后**的普通空白（换行、缩进）仍属于那条语句（`… WHERE |` 接着写）；
- *  - 空行才是分界：用户用空行起一条新 SQL 时，即使没写分号也不该继承上一条。
- */
+/** 补全口径的语句边界类别 */
 export type SqlStatementBoundary =
   /** 光标落在语句文本里 */
   | 'inside-statement'
@@ -414,22 +282,7 @@ export interface CompletionStatementContext {
   boundary: SqlStatementBoundary
 }
 
-/**
- * 补全口径的语句上下文。
- *
- * 与 `statementAtCursor`（执行 / 画边框用）的区别：那边要求光标确实"落在"语句里，
- * 空行与语句末尾之后的换行都算不归属；而补全几乎总在"正在写"的位置——
- * 光标停在 `… WHERE ` 之后、或新起一行准备继续写时，必须仍能看到这张表的列，
- * 所以这里把「语句末尾之后、下一条语句之前的空白」也算作该语句。
- *
- * 另外比旧实现多一层：**空行是补全语义上的语句边界**。
- * `SELECT * FROM users\n\nS|` 里的 `S` 要按新语句解析（否则会继续给上一条
- * FROM 之后的 SET / AS / OFFSET 之类候选）。语句内部的空行不会误判 ——
- * 见 `findCompletionBlankLineBoundary` 的结构性判据。
- *
- * 注意语义分工：这里是**补全视图**（编辑器意图）；真实语句要用
- * `statementAtCursor`（执行 / 语义 / 重命名 / 悬停都走那条）。
- */
+/** 补全口径的语句上下文 */
 export function completionStatementContext(
   doc: string,
   pos: number,
@@ -441,12 +294,7 @@ export function completionStatementContext(
     const statement = statements[index]
 
     if (pos >= statement.from && pos <= statement.to) {
-      /*
-       * 光标在语句文本里，但这段文本内部可能夹着空行。
-       * 没写分号时（行首软分隔只认完整关键字）`… users\n\nS` 仍是一条语句，
-       * 补全要把它当「空行之后的新语句」—— 新的范围从空行之后算起，
-       * 上一条 SQL 的表 / 别名就不会进作用域。
-       */
+      /* 光标在语句文本里，但这段文本内部可能夹着空行 */
       const start = findCompletionBlankLineBoundary(doc, statement.from, pos, dbType)
       if (start !== null) {
         return { range: { from: start, to: statement.to }, boundary: 'blank-line' }
@@ -480,13 +328,7 @@ export function completionStatementContext(
   return { range: { from: lineStartOf(doc, pos), to: pos }, boundary: 'new-statement' }
 }
 
-/**
- * 只取解析范围的兼容入口（**仅补全**）。
- *
- * @deprecated 语义 / 重命名 / 悬停请用 `statementAtCursor`（真实 SQL statement）。
- * 这个范围是**补全视图**：它会把空行之后的光标当成新语句，属于编辑器的产品规则，
- * 不是 SQL 标准里的语句边界。
- */
+/** 只取解析范围的兼容入口（**仅补全**） */
 export function completionStatementRange(doc: string, pos: number, dbType = ''): TextRange | null {
   return completionStatementContext(doc, pos, dbType)?.range ?? null
 }
@@ -501,26 +343,7 @@ function lineStartOf(doc: string, pos: number): number {
   return doc.lastIndexOf('\n', pos - 1) + 1
 }
 
-/**
- * 当前补全语句里「空行边界」的候选起点（空行之后的行首），没有则返回 null。
- *
- * **它不是第二个 SQL 解析器**，职责刻意保持小：
- *  - 只找空行、只判「是否在字符串 / 注释 / dollar quote / 括号里」、
- *    只识别**明显的续写信号**；
- *  - 不做语法分析、不判断语句起始关键字：`SELECT` / `INSERT` 这类完整关键字
- *    已经由 `splitSqlStatements` 按行首软分隔切开（光标落在新的真实语句里）；
- *    这里服务的是 `S` / `SE` / `UP` 这类**还没写全的关键字前缀**；
- *  - 词法规则与真实语句扫描器共用方言归一（`normalizeSqlScanDialect`），
- *    不另立一套标准。
- *
- * 判据（结构性信号，不猜语义）：
- *  1. 括号必须闭合 —— `WHERE id IN (\n\n1` 的空行在括号里；
- *  2. 空行前最后一个字符不是续写符 —— `SELECT a,\n\nb` 只是排版
- *     （`SELECT *\nFROM users` 结尾的 `*` 不算续写符，那是完整表达式）；
- *  3. 空行前最后一个词不是续写词 —— `SELECT\n\nname` 显然没写完；
- *  4. 空行后第一个有意义的词（跳过注释）也不是续写词 ——
- *     `WHERE id = 1\n\n-- 注释\nAND name = 'a'` 是同一条件的续写。
- */
+/** 当前补全语句里「空行边界」的候选起点（空行之后的行首），没有则返回 null */
 function findCompletionBlankLineBoundary(
   doc: string,
   from: number,
@@ -631,12 +454,7 @@ function findCompletionBlankLineBoundary(
   return boundary >= 0 ? boundary : null
 }
 
-/**
- * 从 lineStart 起第一个**有意义的**词（跳过空白、行注释、块注释）；没有则返回空串。
- *
- * 必须跳过注释：`\n-- 注释\nAND name = 'a'` 里的 `AND` 才是续写信号，
- * 只看首个非空白字符会漏掉它，把续写误判成新语句。
- */
+/** 从 lineStart 起第一个**有意义的**词（跳过空白、行注释、块注释）；没有则返回空串 */
 function firstMeaningfulWordAt(doc: string, lineStart: number, to: number, dbType = ''): string {
   const dialect = normalizeSqlScanDialect(dbType)
   let i = lineStart
@@ -670,12 +488,7 @@ function firstMeaningfulWordAt(doc: string, lineStart: number, to: number, dbTyp
   return match ? match[0].toLowerCase() : ''
 }
 
-/**
- * 结尾字符是否**必须**继续写（逗号 / 括号 / 赋值与比较运算符）。
- *
- * 刻意收窄：`*` `/` `%` `[` 都**不算**续写信号 —— 它们可能只是表达式的一部分
- * （`SELECT *\nFROM users` 的 `*` 已经写完了），误判会让空行边界永远不成立。
- */
+/** 结尾字符是否**必须**继续写（逗号 / 括号 / 赋值与比较运算符） */
 function endsWithContinuation(doc: string, contentEnd: number): boolean {
   if (contentEnd < 0) {
     return true
@@ -683,13 +496,7 @@ function endsWithContinuation(doc: string, contentEnd: number): boolean {
   return /[,.(=+\-<>:&|!?]/.test(doc[contentEnd] ?? '')
 }
 
-/**
- * 续写提示词 —— **只用来消除「明显续写」的误切，不是 SQL grammar**。
- *
- * 缺了某个关键字，最多让极少数合法写法被判成新语句；这是「空行 = 编辑器里的
- * 新 SQL 意图」这条产品规则的一部分，不是 SQL 标准解析。
- * 不收可以独立收尾的词（如 `DESC`、`NULL`、`TRUE`）。
- */
+/** 续写提示词 —— **只用来消除「明显续写」的误切，不是 SQL grammar** */
 const CONTINUATION_CLAUSE_WORDS = new Set([
   'select', 'distinct', 'all', 'from', 'join', 'left', 'right', 'inner', 'outer',
   'full', 'cross', 'on', 'using', 'where', 'group', 'order', 'by', 'having',
@@ -718,13 +525,7 @@ export function sqlContextKindOf(scan: ClauseScan, statementText: string): Compl
     case 'afterSource':
       return 'keyword'
     case 'column':
-      /*
-       * 关联条件：ON 且同一条语句里出现过 JOIN（ON 也会出现在 CREATE INDEX 等语句里）。
-       *
-       * 但只有「ON 之后还空着」才是「该写整条条件」的位置：
-       * `ON |` → join-on（给 `o.user_id = u.id`）；
-       * `ON o.user_id = u.|` → join-expression（只给列）。
-       */
+      /* 关联条件：ON 且同一条语句里出现过 JOIN（ON 也会出现在 CREATE INDEX 等语句里） */
       if (scan.keyword === 'on' && /\bjoin\b/i.test(statementText)) {
         return scan.tail ? 'join-expression' : 'join-on'
       }
@@ -758,27 +559,13 @@ function isInsideJoinClause(statementText: string): boolean {
 
 // ---------------------------------------------------------------- 列补全意图
 
-/**
- * 列补全模式。
- *
- * - `single`：普通单选补全（选一个候选继续写）；**不出现复选框**；
- * - `multi`：多选列模式（勾选若干列，回车一次插入）；**出现复选框**。
- *
- * 这是「补全意图」的语义结果，不是候选类型的自然结果 ——
- * 列候选在任何地方都长得一样，是否多选取决于光标处在什么状态。
- */
+/** 列补全模式 */
 export type ColumnCompletionMode = 'single' | 'multi'
 
 /** 光标前那一个输出项是什么（决定 `,|` 与 `, |` 的差别） */
 export type PreviousItemKind = 'column' | 'expression' | 'function' | 'unknown'
 
-/**
- * 光标处的列补全意图。
- *
- * 文档要求把 `t.|`、`t.user_id,|`、`t.user_id, |` 三种状态分开表达，
- * 这里就是那份表达：**由结构推导**（子句关键字 + 括号深度 + 逗号位置），
- * 而不是 `prefix === ''` 或 `text.includes(',')` 这类字符串条件。
- */
+/** 光标处的列补全意图 */
 export interface SqlColumnIntent {
   /** 是否处于 SELECT 列表的列位置（其它子句的列位置不算） */
   isColumnList: boolean
@@ -821,13 +608,7 @@ function emptyColumnIntent(): SqlColumnIntent {
 /** 单独写一个关键字也算「还没开始写表达式」（`SELECT DISTINCT |`） */
 const ITEM_ONLY_KEYWORDS = new Set(['distinct', 'all'])
 
-/**
- * 该输出项是否还没写表达式内容。
- *
- * `SELECT |`、`SELECT t.`、`SELECT DISTINCT |` 都是「新的一项刚开头」，
- * 而 `SELECT id |`、`SELECT a + ` 已经在表达式里了 —— 两者允许的关键字不同
- * （前者不该出现 FROM / WHERE / GROUP BY）。
- */
+/** 该输出项是否还没写表达式内容 */
 function isEmptyItem(itemText: string, qualifier: string, prefix: string): boolean {
   // `SELECT DISTINCT |` 里的 DISTINCT 只是列表开头的修饰，不影响「这一项还没开始写」
   if (prefix && !ITEM_ONLY_KEYWORDS.has(prefix.toLowerCase())) {
@@ -873,16 +654,7 @@ interface OutputItemTail {
   afterComma: boolean
 }
 
-/**
- * 光标所在**输出项**的原文 + 起点类型。
- *
- * 保留空白很关键：`,|` 与 `, |` 的区别就是逗号后面有没有落空格，
- * 任何 trim 过的中间结果都会把这条信息丢掉（`ClauseScan.tail` 正是 trim 过的）。
- *
- * 必须**从左往右**扫：只有正向扫描才知道某个逗号处在第几层括号里。
- * 反向扫描会踩坑 —— `SELECT func(a,|` 里那个逗号左边还有 `(`，
- * 但反向扫到它时还没见过 `(`，于是被误判成「输出项边界」（真实 bug，已修）。
- */
+/** 光标所在**输出项**的原文 + 起点类型 */
 function itemTailOf(prefix: string): OutputItemTail {
   let depth = 0
   let boundary = 0
@@ -926,12 +698,7 @@ function itemTailOf(prefix: string): OutputItemTail {
   return { text: prefix.slice(boundary), afterComma }
 }
 
-/**
- * 上一个输出项的原文（最后一个同层逗号**之前那一项**的内容，不含 SELECT 等前导）。
- *
- * 同样从左往右扫，只在「新一项还没开始输入」时调用，用来取它的类型与限定符：
- * `t.user_id` 得到限定符 `t`，于是多选新列能沿用同一个来源。
- */
+/** 上一个输出项的原文（最后一个同层逗号**之前那一项**的内容，不含 SELECT 等前导） */
 function previousItemText(prefix: string): string {
   let depth = 0
   let boundary = 0
@@ -990,31 +757,11 @@ function itemKindOf(item: string): PreviousItemKind {
   return trimmed.endsWith(')') ? 'function' : 'expression'
 }
 
-/**
- * 从「语句内光标之前的文本」推导列补全意图。
- *
- * 规则完全由结构给出：
- *
- * | 光标状态            | 依据                                   | 模式    |
- * | ------------------- | -------------------------------------- | ------- |
- * | `SELECT t.`         | SELECT 列表内 + 限定符 + 空前缀         | multi   |
- * | `SELECT `           | SELECT 列表内 + 新项，还没输入          | multi   |
- * | `SELECT t.user_id, `| 逗号后已落空白（新项还没开始输入）      | multi   |
- * | `SELECT t.user_id,` | 逗号紧跟光标（还在上一项的收尾手感里）  | single  |
- * | `SELECT t.em`       | 已经在输入词                            | single  |
- * | `SELECT func(a, `   | 括号深度 > 0，不是 SELECT 列表          | single  |
- * | `INSERT INTO t (a,` | 命中关键字不是 select                   | single  |
- *
- * 「逗号紧跟光标 = single」是产品规则：`t.user_id,|` 是**继续写下一列**的手感，
- * 此时不该弹一屏复选框；用户主动落下空格（`, |`）才算「开始新的一项」。
- */
+/** 从「语句内光标之前的文本」推导列补全意图 */
 export function readColumnIntent(prefix: string): SqlColumnIntent {
   const scan = scanClause(prefix)
   const intent = emptyColumnIntent()
-  /*
-   * INPUT：`SELECT` 列表（含 `SELECT DISTINCT` —— DISTINCT 是列表开头的修饰，
-   * 位置仍然是「新的一项」）。其它关键字（WHERE / ON / SET…）不是输出项，一律空意图。
-   */
+  /* INPUT：`SELECT` 列表（含 `SELECT DISTINCT` —— DISTINCT 是列表开头的修饰 */
   const inSelectList = scan.keyword === 'select'
     || scan.keyword === 'distinct'
     || scan.keyword === 'all'
@@ -1022,11 +769,7 @@ export function readColumnIntent(prefix: string): SqlColumnIntent {
     return intent
   }
 
-  /*
-   * tail 是「当前输出项」的原文（光标前最后一个同层逗号 / SELECT 之后的全部文本，
-   * **保留空白**）：`,|` 与 `, |` 的差别全在里面，所以不能用 ClauseScan.tail ——
-   * 那份是 trim 过的，正好把要判的那个空格吃掉了。
-   */
+  /* tail 是「当前输出项」的原文（光标前最后一个同层逗号 / SELECT 之后的全部文本， **保留空白**）：` */
   const item = itemTailOf(prefix)
   if (parenDepthOf(item.text) !== 0) {
     return intent
@@ -1066,12 +809,7 @@ export function readColumnIntent(prefix: string): SqlColumnIntent {
   }
 }
 
-/**
- * 输出项里的「词 + 左侧限定符」。
- *
- * `t.` → qualifier `t`、prefix 空串；`t.em` → `t` / `em`；`em` → 空串 / `em`。
- * 限定符必须紧贴点号，所以「表达式里的点号」（`a + b.`）不会被误认成限定符。
- */
+/** 输出项里的「词 + 左侧限定符」 */
 function qualifierAndPrefix(itemText: string): { qualifier: string, prefix: string } {
   const trimmed = itemText.trimEnd()
   const word = new RegExp(`${IDENT_BODY_SOURCE}$`).exec(trimmed)?.[0] ?? ''
@@ -1093,21 +831,11 @@ function previousQualifierOf(itemText: string): string {
 
 // ---------------------------------------------------------------- 光标语义
 
-/**
- * SQL 光标语义（文本层）。
- *
- * 一次分析把「在哪条语句 / 什么位置 / 正在输入什么 / 列补全是什么意图」全部落在
- * 这个对象上，上层（触发策略、候选生成、复选框渲染）不再各自推导。
- */
+/** SQL 光标语义（文本层） */
 export interface SqlCursorText {
   /** 光标所在语句 */
   statement: TextRange | null
-  /**
-   * 语句边界：光标是「仍在语句里 / 语句后的空白」还是「已进入新语句」。
-   *
-   * 新语句（空行之后、分号之后、文件开头）的 `statement` 只覆盖新语句本身，
-   * 因此作用域解析不会看到上一条 SQL 的表与别名。
-   */
+  /** 语句边界：光标是「仍在语句里 / 语句后的空白」还是「已进入新语句」 */
   statementBoundary: SqlStatementBoundary
   /** 语句内光标之前的文本（子句扫描的输入） */
   clausePrefix: string
@@ -1121,12 +849,7 @@ export interface SqlCursorText {
   column: SqlColumnIntent
   /** 语句的主关键字（select / update / insert / delete…），判不出为空串 */
   command: string
-  /**
-   * 当前 JOIN 的源（最近一个 `JOIN` 后面的表与别名）。
-   *
-   * 关联条件生成用它当「ON 左侧的表」，而不是靠作用域数组的先后顺序猜 ——
-   * 派生表、CTE、多级 JOIN 混在一起时，顺序并不可靠。取不到时为 null。
-   */
+  /** 当前 JOIN 的源（最近一个 `JOIN` 后面的表与别名） */
   joinTarget: { table: string, alias: string } | null
 }
 
@@ -1154,13 +877,7 @@ export function analyzeSqlCursorText(
   }
 }
 
-/**
- * 取最近一个 `JOIN` 后面的表与别名。
- *
- * `JOIN orders o ON …` → `{ table: 'orders', alias: 'o' }`。
- * `JOIN (SELECT …) o ON …` 这种派生表拿不到（返回 null），
- * 调用方退回「作用域里最后加入的表」。
- */
+/** 取最近一个 `JOIN` 后面的表与别名 */
 function joinTargetOf(clausePrefix: string): { table: string, alias: string } | null {
   let end = -1
   for (const match of clausePrefix.matchAll(/\bjoin\b/gi)) {

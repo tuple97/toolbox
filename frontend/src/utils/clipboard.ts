@@ -19,12 +19,7 @@ export async function copyText(text: string): Promise<void> {
   throw new Error('当前环境不支持写入剪贴板')
 }
 
-/**
- * 读取剪贴板文本。
- *
- * 返回 `null` 表示「读不了」（环境不支持或权限被拒），与「读到了但内容为空」
- * 区分开：前者只能保守地把「粘贴」置灰，后者说明剪贴板确实是空的。
- */
+/** 读取剪贴板文本 */
 export async function readText(): Promise<string | null> {
   try {
     if (Clipboard?.Text) {

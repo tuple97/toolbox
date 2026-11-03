@@ -1,16 +1,4 @@
-/**
- * 关联条件补全（`JOIN … ON |` 位置）。
- *
- * 候选是整条条件表达式，而不是单个列名：在 ON 后面最想写的就是
- * 「左右两张表按哪个字段连起来」，逐个挑列名再自己拼 `=` 属于重复劳动。
- *
- * 三种来源，优先级从高到低：
- *  1. **外键约束**：数据库里真实存在的引用关系（需要元数据提供者给出，拿不到就跳过）；
- *  2. **命名启发式**：`{单数表名}_id` → `{对方表}.id`，两个方向都试；
- *  3. 类型兼容过滤：两侧列类型明显不兼容（如 int 与 text）的直接不给。
- *
- * 全部是纯函数：表格引用与列都从参数传入，用例可注入静态数据。
- */
+/** 关联条件补全（`JOIN … ON |` 位置） */
 import type { Completion } from '@codemirror/autocomplete'
 import { typesCompatible } from './sqlTypeCompat'
 
@@ -44,12 +32,7 @@ export interface JoinConditionInput {
   others: JoinSide[]
 }
 
-/**
- * 表名单数化（`orders` → `order`、`companies` → `company`）。
- *
- * 只处理关联条件里最常见的几种后缀；不认识的词原样返回，
- * 宁可不生成候选，也不要猜出错误的条件。
- */
+/** 表名单数化（`orders` → `order`、`companies` → `company`） */
 export function singularTableName(table: string): string {
   const lower = table.toLowerCase()
   const irregular: Record<string, string> = {
@@ -84,11 +67,7 @@ function qualifierOf(side: JoinSide): string {
   return side.alias || side.table
 }
 
-/**
- * 为一对表生成关联条件候选。
- *
- * 生成的顺序是「外键优先、命名启发式其次」，同一来源内保持列顺序稳定。
- */
+/** 为一对表生成关联条件候选 */
 export function joinConditionsForPair(left: JoinSide, other: JoinSide): Completion[] {
   const items: Completion[] = []
   const seen = new Set<string>()
@@ -101,10 +80,7 @@ export function joinConditionsForPair(left: JoinSide, other: JoinSide): Completi
     items.push({ label: text, type: 'text', detail, apply: text })
   }
 
-  /*
-   * 列名一律小写做键：元数据可能返回 `USER_ID` 而外键信息写的是 `user_id`，
-   * 直接按原样查会静默匹配不到（不同数据库的大小写习惯差异很大）。
-   */
+  /* 列名一律小写做键：元数据可能返回 `USER_ID` 而外键信息写的是 `user_id` */
   const columnsOf = (side: JoinSide) =>
     new Map(side.columns.map(column => [column.name.toLowerCase(), column]))
   const leftColumns = columnsOf(left)

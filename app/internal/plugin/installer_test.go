@@ -165,6 +165,7 @@ func TestInstallRequiresTrust(t *testing.T) {
 // TestInstallFromLocalDir 本地目录安装（开发者模式）。
 func TestInstallFromLocalDir(t *testing.T) {
 	mgr := newTestManager(t)
+	mgr.SetDeveloperMode(true)
 	mf := withBackend(baseManifest("com.toolbox.dev", "1.0.0"))
 	dir := writePluginDir(t, mf, nil)
 
@@ -183,12 +184,13 @@ func TestInstallFromLocalDir(t *testing.T) {
 	}
 }
 
-// TestLocalDirParentSelectionHint 选中父目录时应给出可读提示。
-func TestLocalDirParentSelectionHint(t *testing.T) {
+// TestLocalDirParentReportedAsContainer 选中父目录时给出容器提示，而不是直接装它下面的插件。
+func TestLocalDirParentReportedAsContainer(t *testing.T) {
 	mgr := newTestManager(t)
+	mgr.SetDeveloperMode(true)
 	parent := t.TempDir()
 	for _, id := range []string{"com.toolbox.one", "com.toolbox.two"} {
-		mf := baseManifest(id, "1.0.0")
+		mf := withBackend(baseManifest(id, "1.0.0"))
 		raw, err := json.Marshal(mf)
 		if err != nil {
 			t.Fatalf("序列化失败: %v", err)
@@ -200,16 +202,197 @@ func TestLocalDirParentSelectionHint(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(child, ManifestFileName), raw, 0o644); err != nil {
 			t.Fatalf("写入清单失败: %v", err)
 		}
+		if err := os.MkdirAll(filepath.Join(child, "backend"), 0o755); err != nil {
+			t.Fatalf("创建后端目录失败: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(child, "backend/index.js"), []byte(`toolbox.handler('ping', function () { return 1 })`), 0o644); err != nil {
+			t.Fatalf("写入后端入口失败: %v", err)
+		}
 	}
 
-	_, err := mgr.Preview(context.Background(),
+	preview, err := mgr.Preview(context.Background(),
 		[]PackageInput{{Source: SourceLocalDir, Ref: parent}},
 		PreviewOptions{ResolveDependencies: true})
-	if err == nil {
-		t.Fatal("选中父目录应当失败并提示具体插件目录")
+	if err != nil {
+		t.Fatalf("预览父目录失败: %v", err)
 	}
-	if !strings.Contains(err.Error(), "请选择具体的插件目录") {
-		t.Fatalf("提示信息不友好: %v", err)
+	/* 容器目录不安装：装它下面的插件等于复制一批副本，之后增删插件还得重装； 登记成源之后，市场每次刷新都能看到当前有哪些插件 */
+	if preview.Container == nil {
+		t.Fatalf("父目录应识别为容器目录: %+v", preview)
+	}
+	if preview.Container.Path != parent || preview.Container.Count != 2 {
+		t.Fatalf("容器信息不对: %+v", preview.Container)
+	}
+	if preview.PlanID != "" || len(preview.Packages) != 0 {
+		t.Fatalf("容器目录不应产生安装计划: %+v", preview)
+	}
+}
+
+// TestLocalDirRepoRootReportedAsContainer 选中插件仓库根目录（含 plugins/）同样识别为容器。
+func TestLocalDirRepoRootReportedAsContainer(t *testing.T) {
+	mgr := newTestManager(t)
+	mgr.SetDeveloperMode(true)
+	root := t.TempDir()
+	pluginsDir := filepath.Join(root, "plugins", "demo")
+	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
+		t.Fatalf("创建目录失败: %v", err)
+	}
+	mf := withBackend(baseManifest("com.toolbox.repo", "1.0.0"))
+	raw, err := json.Marshal(mf)
+	if err != nil {
+		t.Fatalf("序列化失败: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginsDir, ManifestFileName), raw, 0o644); err != nil {
+		t.Fatalf("写入清单失败: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(pluginsDir, "backend"), 0o755); err != nil {
+		t.Fatalf("创建后端目录失败: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginsDir, "backend/index.js"), []byte(`toolbox.handler('ping', function () { return 1 })`), 0o644); err != nil {
+		t.Fatalf("写入后端入口失败: %v", err)
+	}
+
+	preview, err := mgr.Preview(context.Background(),
+		[]PackageInput{{Source: SourceLocalDir, Ref: root}},
+		PreviewOptions{ResolveDependencies: true})
+	if err != nil {
+		t.Fatalf("预览仓库根目录失败: %v", err)
+	}
+	if preview.Container == nil || preview.Container.Path != root || preview.Container.Count != 1 {
+		t.Fatalf("仓库根目录也应识别为容器目录: %+v", preview.Container)
+	}
+}
+
+// TestLocalDirRunsFromSource 开发者模式从源码目录安装：直接在原目录运行，不复制进资源目录。
+func TestLocalDirRunsFromSource(t *testing.T) {
+	mgr := newTestManager(t)
+	mgr.SetDeveloperMode(true)
+	dir := writePluginDir(t, withBackend(baseManifest("com.toolbox.dev", "1.0.0")), map[string]string{
+		"backend/index.js": `toolbox.handler('ping', function () { return 1 })`,
+	})
+
+	preview, err := mgr.Preview(context.Background(),
+		[]PackageInput{{Source: SourceLocalDir, Ref: dir}},
+		PreviewOptions{ResolveDependencies: true})
+	if err != nil {
+		t.Fatalf("预览源码目录失败: %v", err)
+	}
+	if err := mgr.InstallPlan(context.Background(), preview.PlanID, true, true); err != nil {
+		t.Fatalf("安装源码目录失败: %v", err)
+	}
+
+	// 内容仍留在源目录，资源目录里不该再有这个版本的副本
+	if _, err := os.Stat(mgr.Store().VersionDir("com.toolbox.dev", "1.0.0")); !os.IsNotExist(err) {
+		t.Fatalf("源码目录插件不应在资源目录留副本，实际存在: %v", err)
+	}
+	if info := findInfo(t, mgr, "com.toolbox.dev"); !info.Loaded {
+		t.Fatalf("应从源码目录加载: %+v", info)
+	}
+
+	// 改源码即生效：换掉脚本内容再重新加载，不需要重装
+	script := `toolbox.handler('ping', function () { return 2 })`
+	if err := os.WriteFile(filepath.Join(dir, "backend", "index.js"), []byte(script), 0o644); err != nil {
+		t.Fatalf("改写后端入口失败: %v", err)
+	}
+	if err := mgr.Reload(context.Background()); err != nil {
+		t.Fatalf("重新加载失败: %v", err)
+	}
+	if info := findInfo(t, mgr, "com.toolbox.dev"); !info.Loaded {
+		t.Fatalf("改源码后应仍从源码目录加载: %+v", info)
+	}
+}
+
+// TestLocalSourceScansAndInstalls 目录可以作为插件源：扫出条目并能安装。
+func TestLocalSourceScansAndInstalls(t *testing.T) {
+	mgr := newTestManager(t)
+	mgr.SetDeveloperMode(true)
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "plugins", "demo")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("创建目录失败: %v", err)
+	}
+	mf := withBackend(baseManifest("com.toolbox.local", "1.0.0"))
+	raw, err := json.Marshal(mf)
+	if err != nil {
+		t.Fatalf("序列化失败: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ManifestFileName), raw, 0o644); err != nil {
+		t.Fatalf("写入清单失败: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "backend"), 0o755); err != nil {
+		t.Fatalf("创建后端目录失败: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "backend/index.js"), []byte(`toolbox.handler('ping', function () { return 1 })`), 0o644); err != nil {
+		t.Fatalf("写入后端入口失败: %v", err)
+	}
+
+	src := RegistrySource{URL: "file://" + root, Name: "本地开发", Enabled: true}
+	if err := mgr.SetSources([]RegistrySource{
+		{URL: mgr.client.Provider().IndexURL, Enabled: false},
+		src,
+	}); err != nil {
+		t.Fatalf("添加本地源失败: %v", err)
+	}
+
+	snapshot := mgr.Marketplace(context.Background(), true)
+	var found bool
+	for _, item := range snapshot.Items {
+		if item.ID == "com.toolbox.local" {
+			found = true
+			if item.SourceURL != localSourceURL(root) {
+				t.Fatalf("条目应归属本地源: %+v", item)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("本地源应扫出插件: %+v", snapshot.Items)
+	}
+
+	// 从本地源安装
+	preview, err := mgr.Preview(context.Background(), []PackageInput{{
+		Source:    SourceRegistry,
+		SourceURL: localSourceURL(root),
+		ID:        "com.toolbox.local",
+	}}, PreviewOptions{ResolveDependencies: true})
+	if err != nil {
+		t.Fatalf("从本地源预览失败: %v", err)
+	}
+	if err := mgr.InstallPlan(context.Background(), preview.PlanID, true, true); err != nil {
+		t.Fatalf("从本地源安装失败: %v", err)
+	}
+	if info := findInfo(t, mgr, "com.toolbox.local"); !info.Loaded {
+		t.Fatalf("本地源插件应加载: %+v", info)
+	}
+}
+
+// TestLocalSourceRequiresDevMode 关闭开发者模式时本地源不可用。
+func TestLocalSourceRequiresDevMode(t *testing.T) {
+	mgr := newTestManager(t)
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "plugins", "demo"), 0o755); err != nil {
+		t.Fatalf("创建目录失败: %v", err)
+	}
+	src := RegistrySource{URL: "file://" + root, Name: "本地开发", Enabled: true}
+	if err := mgr.SetSources([]RegistrySource{
+		{URL: mgr.client.Provider().IndexURL, Enabled: false},
+		src,
+	}); err != nil {
+		t.Fatalf("添加本地源失败: %v", err)
+	}
+
+	mgr.SetDeveloperMode(false)
+	snapshot := mgr.Marketplace(context.Background(), true)
+	if len(snapshot.Items) != 0 {
+		t.Fatalf("关闭开发者模式后本地源不应产出条目: %+v", snapshot.Items)
+	}
+	for _, view := range snapshot.Sources {
+		if view.Official {
+			continue
+		}
+		if view.State != "error" || !strings.Contains(view.Error, "开发者模式") {
+			t.Fatalf("本地源应提示需要开发者模式: %+v", view)
+		}
 	}
 }
 
@@ -629,12 +812,20 @@ func TestReinstallSameVersion(t *testing.T) {
 		t.Fatalf("重装失败: %v", err)
 	}
 
-	raw, err := os.ReadFile(filepath.Join(mgr.Store().VersionDir(mf.ID, mf.Version), "backend", "index.js"))
+	/* 源码目录插件的重装 = 把引用指向新的目录： 资源目录里没有副本可覆盖，被读到的内容自然来自新目录 */
+	current, err := mgr.PluginDir(mf.ID)
+	if err != nil {
+		t.Fatalf("读取插件目录失败: %v", err)
+	}
+	if filepath.Clean(current) != filepath.Clean(second) {
+		t.Fatalf("重装后应指向新的源码目录，实际 %s", current)
+	}
+	raw, err := os.ReadFile(filepath.Join(second, "backend", "index.js"))
 	if err != nil {
 		t.Fatalf("读取重装后的文件失败: %v", err)
 	}
 	if !strings.Contains(string(raw), "v2") {
-		t.Fatalf("重装未覆盖文件内容: %s", raw)
+		t.Fatalf("重装未指向新内容: %s", raw)
 	}
 }
 
@@ -918,10 +1109,7 @@ func TestRegistrySignatureVerification(t *testing.T) {
 		}
 	})
 
-	/*
-	 * 以下两组针对「用户自添加的第三方来源」：反过来了 —— 官方源缺签名必须拒绝，
-	 * 而用户自设来源缺少签名要容忍（按未验签处理），但签名存在却验不过仍然要拒绝。
-	 */
+	/* 以下两组针对「用户自添加的第三方来源」：反过来了 —— 官方源缺签名必须拒绝 */
 	t.Run("用户来源未提供签名时按未验签处理", func(t *testing.T) {
 		reg := newTestRegistry(t)
 		reg.publish(t, baseManifest("com.toolbox.third", "1.0.0"), nil, true)

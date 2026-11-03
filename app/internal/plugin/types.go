@@ -187,6 +187,19 @@ type InstallPreview struct {
 	AddedPermissions []string `json:"addedPermissions"`
 	// PendingDownloads 需要联网下载的安装包数量
 	PendingDownloads int `json:"pendingDownloads"`
+	// Container 选中的是「容器目录」时的提示：它不是可安装的包，应该登记成插件源
+	Container *LocalContainer `json:"container,omitempty"`
+}
+
+// LocalContainer 容器目录的信息。
+//
+// 容器目录指项目根目录或它的 plugins 目录：本身不是插件，下面才是。
+// 界面拿到它应当把该目录登记为本地插件源，而不是逐个安装。
+type LocalContainer struct {
+	// Path 目录绝对路径
+	Path string `json:"path"`
+	// Count 目录下发现的插件数量
+	Count int `json:"count"`
 }
 
 // PackageInputWire 前端传来的安装输入（离线包内容用 base64 承载）。

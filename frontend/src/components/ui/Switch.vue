@@ -1,10 +1,5 @@
 <script setup lang="ts">
-/**
- * 开关。
- *
- * 用 reka-ui 的 Switch 原语（键盘可操作、`role="switch"`、aria 状态齐全），
- * 视觉自己写：轨道尺寸用 rem，跟着根字号（13px × 缩放比例）一起放大。
- */
+/** 开关 */
 import { SwitchRoot, SwitchThumb } from 'reka-ui'
 import { cn } from '@/lib/utils'
 
@@ -28,7 +23,7 @@ const model = defineModel<boolean>({ default: false })
     )"
   >
     <SwitchThumb
-      class="pointer-events-none block size-4 rounded-full bg-white shadow-sm transition-transform
+      class="pointer-events-none block size-4 rounded-full bg-on-brand shadow-sm transition-transform
              data-[state=unchecked]:translate-x-0.5 data-[state=checked]:translate-x-4"
     />
   </SwitchRoot>

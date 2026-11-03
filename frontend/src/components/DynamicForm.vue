@@ -15,12 +15,7 @@ const props = withDefaults(defineProps<{
   configs: VariableConfig[]
   /** 当前连接 ID */
   connId: number | null
-  /**
-   * 当前选中的库 / 模式。
-   *
-   * 动态选项 SQL 在这里执行（后端会把它钉在会话上，语义与查询、命令执行器一致）；
-   * 空表示用连接配置里的默认库。
-   */
+  /** 当前选中的库 / 模式 */
   database?: string
   /** 多个变量是否横向排布 */
   inline?: boolean
@@ -221,12 +216,7 @@ watch(
   },
 )
 
-/**
- * 取数来源签名：当前连接、当前库，以及每个变量自己的覆盖项。
- *
- * 任一变化都要重拉——缓存里的选项属于上一个库，不重拉的话切库后
- * 下拉里还是旧库的字典值（拉取结果会原地覆盖，无需先清空）。
- */
+/** 取数来源签名：当前连接、当前库，以及每个变量自己的覆盖项 */
 const optionSourceKey = computed(() => [
   props.connId ?? '',
   props.database,

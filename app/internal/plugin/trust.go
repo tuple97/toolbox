@@ -17,7 +17,7 @@ import (
 //
 // 通过编译期注入（推荐，发布流水线使用）：
 //
-//	go build -ldflags "-X toolbox/app/internal/plugin.RegistryPublicKey=<base64>"
+// go build -ldflags "-X toolbox/app/internal/plugin.RegistryPu
 //
 // 为空时表示索引签名校验未启用。此时：
 //   - 索引仍然可以使用（本地开发、自建索引）；

@@ -83,6 +83,8 @@ export const PluginSourceMarketplace = App.PluginSourceMarketplace
 export const PluginAssetBase = App.PluginAssetBase
 export const PluginReadAsset = App.PluginReadAsset
 export const PluginOpenFolder = App.PluginOpenFolder
+export const PluginDeveloperMode = App.PluginDeveloperMode
+export const PluginSetDeveloperMode = App.PluginSetDeveloperMode
 
 // ---- 应用信息 ----
 export const GetAppInfo = App.GetAppInfo

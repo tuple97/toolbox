@@ -1,10 +1,5 @@
 <script setup lang="ts">
-/**
- * 应用默认右键菜单：复制 / 剪切 / 粘贴。
- *
- * 只做渲染与派发，启用规则与剪贴板操作都在 utils/editingContextMenu.ts 里；
- * 菜单外观复用通用的 ContextMenu，和标签页 / 插件卡片的右键菜单保持一致。
- */
+/** 应用默认右键菜单：复制 / 剪切 / 粘贴 */
 import { computed } from 'vue'
 import ContextMenu from '@/components/ContextMenu.vue'
 import { closeEditingMenu, editingMenu, runEditingAction } from '@/utils/editingContextMenu'

@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"toolbox/app/internal/semver"
 )
@@ -23,6 +26,26 @@ type Storage interface {
 // EventSink 应用事件出口（把插件事件送到前端总线）。
 type EventSink interface {
 	Emit(name string, payload any)
+}
+
+// SaveFileRequest 一次「另存为」请求。
+type SaveFileRequest struct {
+	// Title 对话框标题
+	Title string
+	// DefaultFileName 对话框里的建议文件名
+	DefaultFileName string
+	// Filters 类型过滤项
+	Filters []FileFilter
+}
+
+// DialogProvider 宿主对话框能力（由 app 层用 Wails 实现）。
+//
+// 抽成接口是为了让插件内核不依赖 Wails：
+// internal/plugin 的测试可以注入一个假实现，验证「插件拿不到写入路径」。
+type DialogProvider interface {
+	// SaveFile 弹出系统的保存对话框，返回用户确认的绝对路径；
+	// 取消时返回空串。
+	SaveFile(req SaveFileRequest) (string, error)
 }
 
 // Options 管理器装配参数。
@@ -45,6 +68,12 @@ type Options struct {
 	Events EventSink
 	// RuntimeFactory 运行时工厂；为空时使用内置实现
 	RuntimeFactory RuntimeFactory
+	// DeveloperMode 启动时是否开启开发者模式（后续可在设置里随时开关）
+	DeveloperMode bool
+	// Dialogs 宿主对话框能力（导出文件时弹出「另存为」）
+	//
+	// 为空时插件的 toolbox.fs.saveText 会明确报错，而不是写到一个用户没选过的地方。
+	Dialogs DialogProvider
 }
 
 // loaded 单个已加载插件的运行时状态。
@@ -74,6 +103,11 @@ type Manager struct {
 	loaded    map[string]*loaded
 	graph     *DepGraph
 	blocked   map[string]string
+	// localDirs 直接在源码目录运行的插件：id → 源码目录。
+	//
+	// 这类插件在资源目录里没有版本目录，读清单 / 入口 / 资源都要改指到源码目录，
+	// 否则加载时会在资源目录里找一个不存在的目录。由 scan 依据记录填充。
+	localDirs map[string]string
 	// recoverErr 启动恢复失败的原因（供界面提示）
 	recoverErr string
 
@@ -85,7 +119,25 @@ type Manager struct {
 	indexMu       sync.Mutex
 	sources       []RegistrySource
 	sourceIndexes map[string]*sourceIndex
+
+	// devMode 开发者模式：允许从源码目录安装，并跳过来源信任确认。
+	//
+	// 用原子量而不是普通字段：它由设置页随时开关，
+	// 而安装流程可能正跑在别的 goroutine 上。
+	devMode atomic.Bool
 }
+
+// SetDeveloperMode 开关开发者模式。
+//
+// 关闭时只保留「已编译产物」的安装路径（在线市场 / 离线包 / 下载地址），
+// 源码目录安装会被直接拒绝 —— 源码目录没有摘要、没有签名，
+// 无法用发布产物那套校验兜底。
+func (m *Manager) SetDeveloperMode(enabled bool) {
+	m.devMode.Store(enabled)
+}
+
+// DeveloperMode 报告开发者模式是否开启。
+func (m *Manager) DeveloperMode() bool { return m.devMode.Load() }
 
 // NewManager 创建插件管理器。
 func NewManager(opts Options) *Manager {
@@ -111,6 +163,7 @@ func NewManager(opts Options) *Manager {
 	}
 	// 内置官方源随宿主提供，不可删除：缺了就补上
 	m.sources = m.withOfficialSource(m.sources)
+	m.SetDeveloperMode(opts.DeveloperMode)
 	return m
 }
 
@@ -126,6 +179,10 @@ func (m *Manager) PluginDir(id string) (string, error) {
 	m.mu.RUnlock()
 	if rec == nil {
 		return "", fmt.Errorf("%w: %s", ErrNotInstalled, id)
+	}
+	// 源码目录插件直接打开用户的目录：改代码就在那里改，不用来资源目录里翻副本
+	if dir := strings.TrimSpace(rec.LocalDir); dir != "" {
+		return dir, nil
 	}
 	return m.store.VersionDir(rec.ID, rec.Version), nil
 }
@@ -243,6 +300,7 @@ func (m *Manager) scan() (map[string]*InstallRecord, map[string]*Manifest) {
 
 	records := make(map[string]*InstallRecord, len(ids))
 	manifests := make(map[string]*Manifest, len(ids))
+	localDirs := make(map[string]string, len(ids))
 
 	for _, id := range ids {
 		rec, recErr := m.store.ReadRecord(id)
@@ -250,6 +308,28 @@ func (m *Manager) scan() (map[string]*InstallRecord, map[string]*Manifest) {
 			slog.Warn("读取插件安装记录失败，已跳过", "plugin", id, "error", recErr)
 			continue
 		}
+
+		/* 直接在源码目录运行的插件（开发者模式）：内容在用户目录里， 资源目录中没有它的版本目录，清单也只存在于源码目录 */
+		if dir := strings.TrimSpace(rec.LocalDir); dir != "" {
+			mf, mfErr := LoadManifest(dir)
+			if mfErr != nil {
+				slog.Warn("读取源码目录清单失败，已标记不可用", "plugin", id, "dir", dir, "error", mfErr)
+				rec.Enabled = false
+				records[id] = rec
+				continue
+			}
+			if mf.ID != id {
+				slog.Warn("源码目录清单的 id 与记录不一致，已标记不可用", "plugin", id, "manifestID", mf.ID)
+				rec.Enabled = false
+				records[id] = rec
+				continue
+			}
+			records[id] = rec
+			manifests[id] = mf
+			localDirs[id] = dir
+			continue
+		}
+
 		if rec.Version == "" || !m.store.HasVersion(id, rec.Version) {
 			slog.Warn("插件记录指向的版本目录不存在", "plugin", id, "version", rec.Version)
 			rec.Enabled = false
@@ -272,7 +352,24 @@ func (m *Manager) scan() (map[string]*InstallRecord, map[string]*Manifest) {
 		records[id] = rec
 		manifests[id] = mf
 	}
+	m.localDirs = localDirs
 	return records, manifests
+}
+
+// readPluginFile 读取插件内容。
+//
+// 开发者模式下装在源码目录上的插件，资源目录里没有它的副本：
+// 读入口与资源要指回源码目录，否则加载时会在资源目录里找一个不存在的目录。
+// 调用方需自行保证对 m.localDirs 的并发访问是安全的。
+func readPluginFile(localDir string, store *Store, id, version, rel string) ([]byte, error) {
+	if localDir != "" {
+		data, err := os.ReadFile(filepath.Join(localDir, filepath.FromSlash(rel)))
+		if err != nil {
+			return nil, fmt.Errorf("读取源码目录资源失败(%s): %w", rel, err)
+		}
+		return data, nil
+	}
+	return store.ReadAsset(id, version, rel)
 }
 
 // computeEffectiveLocked 计算「实际可运行」的插件集合与阻塞原因。
@@ -372,7 +469,8 @@ func (m *Manager) loadPlugin(ctx context.Context, mf *Manifest) *loaded {
 	}
 
 	entry := mf.BackendEntry()
-	source, err := m.store.ReadAsset(mf.ID, mf.Version, entry)
+	// 在 reloadLocked 内调用（持有写锁），直接读映射即可
+	source, err := readPluginFile(m.localDirs[mf.ID], m.store, mf.ID, mf.Version, entry)
 	if err != nil {
 		item.loadErr = fmt.Sprintf("读取后端入口失败: %v", err)
 		_ = runtime.Close()
@@ -784,6 +882,21 @@ func (m *Manager) EnabledPlugins() []PluginSummary {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+// PromptSaveFile 实现 HostEnv：转给宿主注入的对话框实现。
+//
+// 未注入时返回明确错误，而不是退回「写默认目录」——
+// 静默换写入位置比失败更糟，用户会在自己没选过的地方找到文件。
+func (m *Manager) PromptSaveFile(title, defaultFileName string, filters []FileFilter) (string, error) {
+	if m.opts.Dialogs == nil {
+		return "", fmt.Errorf("宿主未提供保存文件对话框")
+	}
+	return m.opts.Dialogs.SaveFile(SaveFileRequest{
+		Title:           title,
+		DefaultFileName: defaultFileName,
+		Filters:         filters,
+	})
 }
 
 // ---------------------------------------------------------------- 工具

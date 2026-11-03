@@ -1,9 +1,4 @@
-/**
- * 更新流程编排：启动检查 → 询问 → 下载 → 提示重启。
- *
- * 状态与并发保护都在 updateStore / 后端控制器里，这里只负责
- * 「按设置决定要不要查」和弹窗编排；设置页的按钮走同一套 store 动作。
- */
+/** 更新流程编排：启动检查 → 询问 → 下载 → 提示重启 */
 import { useConfigStore } from '@/stores/configStore'
 import { useUpdateStore } from '@/stores/updateStore'
 import { askConfirm } from '@/utils/confirm'

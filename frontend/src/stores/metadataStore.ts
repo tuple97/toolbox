@@ -1,19 +1,4 @@
-/**
- * 数据库元数据（库 / 表 / 字段）的全局缓存。
- *
- * 为什么用 pinia 而不是模块级 Map：
- *  - 连接管理页需要「查看 / 刷新」元数据，SQL 执行页的补全也要用同一份数据，
- *    刷新后两处必须立刻一致，不能各存一份；
- *  - 加载状态与缓存时间可观测，界面可以直接绑定（弹窗显示 loading、空态等）。
- *
- * 语义约定（与智能补全的用法一致）：
- *  - 缓存 TTL 为 `META_TTL`；
- *  - `ensureXxx()` **同步**返回当前缓存（可能为空），需要时在后台发起拉取，
- *    绝不阻塞调用方——补全候选必须立刻返回，不能等网络；
- *  - `loadXxx()` 返回 Promise，供需要等待结果的界面（元数据弹窗）使用；
- *  - 刷新 = 丢掉该连接的缓存后重新拉取；
- *  - 拉取失败后进入 `META_RETRY_BACKOFF` 退避窗口，期间 `ensureXxx()` 不再自动重试。
- */
+/** 数据库元数据（库 / 表 / 字段）的全局缓存 */
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { fetchDatabases, fetchForeignKeys, fetchTableColumns, fetchTables } from '@/api/executor'
@@ -22,24 +7,11 @@ import type { DatabaseInfo, ExecutorColumn, TableForeignKey } from '@/types'
 /** 元数据缓存有效期 */
 export const META_TTL = 5 * 60 * 1000
 
-/**
- * 拉取失败后的退避窗口：这段时间内 `ensureXxx()` 不再自动重试。
- *
- * 失败不能写「成功时间戳」（界面会把空数据误当成刚拉到的新数据），但什么都不记
- * 又会让 `ensureXxx()` 在缓存未命中时于**每次按键**重发请求 —— 连接不可用时，
- * 补全的每一次回调都会解密密码、建连、失败、把日志刷满。
- * 窗口取短 TTL：既能止住刷屏，又不至于像成功缓存那样把用户挡 5 分钟
- * （改好连接配置后可用 `loadXxx(..., true)` / `refreshConnection` 立即重试）。
- */
+/** 拉取失败后的退避窗口：期间 `ensureXxx()` 不再自动重试 */
 export const META_RETRY_BACKOFF = 30 * 1000
 
 export const useMetadataStore = defineStore('metadata', () => {
-  /**
-   * 连接 ID → 库列表（含「是否系统库」标记，由后端按方言给出）。
-   *
-   * 只存这一份：库名视图由它派生（`databases`），不另存一份名字清单 ——
-   * 两份数据迟早会不一致。
-   */
+  /** 连接 ID → 库列表（含是否系统库标记） */
   const databaseInfos = ref<Record<number, DatabaseInfo[]>>({})
   const databasesFetchedAt = ref<Record<number, number>>({})
   const databasesFailedAt = ref<Record<number, number>>({})
@@ -64,12 +36,7 @@ export const useMetadataStore = defineStore('metadata', () => {
   const columnsFailedAt = ref<Record<string, number>>({})
   const columnsLoading = ref<Record<string, boolean>>({})
 
-  /**
-   * `${connId}::${database}::${table}` → 外键列表。
-   *
-   * 与字段同样是「按表单独记账」：共用一个时间戳会让先拉完的那份把另一份饿死
-   * （见下面 ensureColumns 的说明）。
-   */
+  /** `${connId}::${database}::${table}` → 外键列表（按表单独记账） */
   const foreignKeys = ref<Record<string, TableForeignKey[]>>({})
   const foreignKeysFetchedAt = ref<Record<string, number>>({})
   const foreignKeysFailedAt = ref<Record<string, number>>({})
@@ -214,12 +181,7 @@ export const useMetadataStore = defineStore('metadata', () => {
 
   // ------------------------------------------------------------ 字段列表
 
-  /**
-   * 读取字段缓存并在需要时后台刷新；同步返回当前可见数据。
-   *
-   * 字段按表单独记账（键含表名），不能与表列表共用一个时间戳：
-   * 否则「表列表刚拉完 → 字段查询看到缓存是新的 → 直接返回空列表且永不发起请求」。
-   */
+  /** 读取字段缓存并在需要时后台刷新（字段按表单独记账） */
   function ensureColumns(connId: number, database: string, table: string): ExecutorColumn[] {
     if (!connId || !table) {
       return []
@@ -290,14 +252,7 @@ export const useMetadataStore = defineStore('metadata', () => {
     return foreignKeys.value[key] ?? []
   }
 
-  /**
-   * 拉取某张表的外键；force 为真时忽略缓存。
-   *
-   * **失败不抛出**：外键只用于把关联条件补全得更准，没有它还有命名启发式兜底，
-   * 不能因为无 information_schema 权限、方言差异之类的原因把补全链路打断 ——
-   * 失败按「这张表没有外键」处理，记进 lastError 供界面提示，并进入退避窗口，
-   * 避免补全每敲一个字就重试一遍。
-   */
+  /** 拉取外键；失败不抛出，按「无外键」处理并进入退避窗口 */
   async function loadForeignKeys(
     connId: number,
     database: string,
@@ -388,12 +343,7 @@ export const useMetadataStore = defineStore('metadata', () => {
     }
   }
 
-  /**
-   * 刷新某个连接的元数据：清空该连接缓存后重新拉取库列表与指定库的表列表。
-   *
-   * 字段列表不在这里预取——表可能很多，全量拉字段代价过高，
-   * 等用户点开某张表（或补全用到）时再按需加载。
-   */
+  /** 刷新某个连接：清空该连接缓存后重拉库列表与指定库的表列表 */
   async function refreshConnection(connId: number, database = ''): Promise<void> {
     if (!connId) {
       return

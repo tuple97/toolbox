@@ -1,14 +1,4 @@
-/**
- * 跳转到定义（Ctrl / Cmd + 左键、F12）。
- *
- * 三类符号都能跳（表别名 / CTE 名称 / 列别名）：语义层早就给出精确的声明范围与
- * 引用集合，这里只做**对称导航** ——
- *  - 光标在引用上 → 跳到声明（最常用的方向）；
- *  - 光标已经在声明上 → 跳到第一处引用（顺手回答「这个别名用在哪」）。
- *
- * 物理表名不参与：它的「定义」在数据库里，不在 SQL 里，跳过去没有意义。
- * 拿不准就返回 null，按键与点击都不响应 —— 不猜。
- */
+/** 跳转到定义（Ctrl / Cmd + 左键、F12） */
 import { EditorSelection, Prec } from '@codemirror/state'
 import type { EditorState, Extension } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
@@ -71,12 +61,7 @@ export function goToDefinition(
   return true
 }
 
-/**
- * 跳转扩展：Ctrl / Cmd + 左键与 F12。
- *
- * 点击用 `Prec.high` 的 domEventHandlers：必须在 CodeMirror 处理这次点击之前拦下，
- * 否则光标会先落到别处，跳完又回到原地。
- */
+/** 跳转扩展：Ctrl / Cmd + 左键与 F12 */
 export function definitionNavigationExtension(options: DefinitionNavOptions): Extension {
   return [
     Prec.high(EditorView.domEventHandlers({

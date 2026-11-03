@@ -413,6 +413,16 @@ export function PluginClearData(pluginID) {
 }
 
 /**
+ * PluginDeveloperMode 报告开发者模式是否开启。
+ * 
+ * 界面据此决定是否给出「从源码目录安装」入口；查不到管理器时一律按关闭处理。
+ * @returns {$CancellablePromise<boolean>}
+ */
+export function PluginDeveloperMode() {
+    return $Call.ByID(2769005827);
+}
+
+/**
  * PluginGetSetting 读取插件的某个配置项。
  * @param {string} pluginID
  * @param {string} key
@@ -581,6 +591,18 @@ export function PluginRollback(id) {
  */
 export function PluginSaveSources(sources) {
     return $Call.ByID(2775758967, sources);
+}
+
+/**
+ * PluginSetDeveloperMode 开关开发者模式并持久化。
+ * 
+ * 开启后：允许从插件源码目录安装，且不再要求确认来源信任。
+ * 关闭后：只接受已编译产物（在线市场、离线包、下载地址）。
+ * @param {boolean} enabled
+ * @returns {$CancellablePromise<void>}
+ */
+export function PluginSetDeveloperMode(enabled) {
+    return $Call.ByID(3809973947, enabled);
 }
 
 /**

@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -71,9 +72,64 @@ func (r *jsRuntime) Start(_ context.Context, host *HostBridge, source []byte) er
 	_, runErr := vm.RunScript(host.PluginID()+"/backend", string(source))
 	stop()
 	if runErr != nil {
-		return fmt.Errorf("执行插件入口脚本失败: %w", runErr)
+		return fmt.Errorf("执行插件入口脚本失败: %w", jsMessage(runErr))
 	}
 	return nil
+}
+
+/* jsMessage 把 goja 抛出的异常还原成「脚本里写的那句话」 */
+func jsMessage(err error) error {
+	exception, ok := err.(*goja.Exception)
+	if !ok {
+		return err
+	}
+
+	text := ""
+	if value := exception.Value(); value != nil {
+		text = strings.TrimSpace(value.String())
+	}
+	if text == "" {
+		text = strings.TrimSpace(exception.Error())
+	}
+	text = strings.TrimSpace(stripJSErrorPrefix(text))
+	if text == "" {
+		// 反序列化不出任何文案时，退回原始错误，至少不丢失信息
+		return err
+	}
+	return errors.New(text)
+}
+
+/* jsErrorPrefixes 需要剥掉的 JS 错误构造器前缀 */
+var jsErrorPrefixes = []string{
+	"GoError: ",
+	"Error: ",
+	"TypeError: ",
+	"RangeError: ",
+	"ReferenceError: ",
+	"SyntaxError: ",
+	"EvalError: ",
+	"URIError: ",
+}
+
+// stripJSErrorPrefix 去掉 "Error:" / "TypeError:" 这类构造器前缀。
+func stripJSErrorPrefix(text string) string {
+	for _, prefix := range jsErrorPrefixes {
+		if strings.HasPrefix(text, prefix) {
+			// 只剥一层；文案本身若以同样的词开头就保留
+			return strings.TrimSpace(strings.TrimPrefix(text, prefix))
+		}
+	}
+	// 光秃秃的构造器名（"Error" / "TypeError"，没有消息）视为空文案
+	bare := strings.TrimSpace(strings.TrimSuffix(text, ":"))
+	if bare == "" {
+		return ""
+	}
+	for _, prefix := range jsErrorPrefixes {
+		if strings.TrimSuffix(strings.TrimSpace(prefix), ":") == bare {
+			return ""
+		}
+	}
+	return text
 }
 
 // Call 调用插件注册的 handler。
@@ -129,7 +185,8 @@ func (r *jsRuntime) Call(ctx context.Context, handler string, args json.RawMessa
 	value, err := fn(goja.Undefined(), r.vm.ToValue(payload))
 	stop()
 	if err != nil {
-		return nil, fmt.Errorf("插件 handler %s 执行失败: %w", handler, err)
+		/* 插件抛出的异常就是它想给用户看的那句话，不要再包一层 「插件 handler xxx 执行失败」——handler 名是 */
+		return nil, jsMessage(err)
 	}
 
 	if value == nil || goja.IsUndefined(value) || goja.IsNull(value) {
@@ -288,7 +345,8 @@ func (r *jsRuntime) injectAPI(vm *goja.Runtime) error {
 		if err != nil {
 			panic(vm.NewGoError(err))
 		}
-		return vm.ToValue(resp)
+		/* 响应按 json tag 手工拼，不能用 vm.ToValue： goja 默认把 Go 的字段名原样带进 JS（Sta */
+		return httpResponseValue(vm, resp)
 	})
 	_ = toolbox.Set("http", httpObj)
 
@@ -414,6 +472,91 @@ func (r *jsRuntime) injectAPI(vm *goja.Runtime) error {
 		}
 		return vm.ToValue(output)
 	})
+	_ = crypto.Set("encrypt", func(call goja.FunctionCall) goja.Value {
+		arg := call.Argument(0)
+		if arg == nil || goja.IsUndefined(arg) || goja.IsNull(arg) {
+			panic(vm.NewTypeError("toolbox.crypto.encrypt 需要一个参数对象"))
+		}
+		var params struct {
+			Key  string `json:"key"`
+			Data string `json:"data"`
+		}
+		encoded, err := json.Marshal(arg.Export())
+		if err != nil {
+			panic(vm.NewGoError(fmt.Errorf("参数无法序列化: %w", err)))
+		}
+		if err := json.Unmarshal(encoded, &params); err != nil {
+			panic(vm.NewTypeError("参数字段非法: " + err.Error()))
+		}
+		output, err := EncryptWithPublicKey(params.Key, params.Data)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return vm.ToValue(output)
+	})
+	// 文件：只能碰清单 permissions.files 里声明的目录；
+	// 写入另有 writeAs（目标路径必须来自系统的保存对话框）
+	fsObj := vm.NewObject()
+	_ = fsObj.Set("readText", func(call goja.FunctionCall) goja.Value {
+		text, err := r.host.ReadTextFile(call.Argument(0).String())
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return vm.ToValue(text)
+	})
+	_ = fsObj.Set("exists", func(call goja.FunctionCall) goja.Value {
+		return vm.ToValue(r.host.FileExists(call.Argument(0).String()))
+	})
+	_ = fsObj.Set("list", func(call goja.FunctionCall) goja.Value {
+		names, err := r.host.ListDir(call.Argument(0).String())
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return vm.ToValue(names)
+	})
+	_ = fsObj.Set("writeText", func(call goja.FunctionCall) goja.Value {
+		path := call.Argument(0).String()
+		fileName := call.Argument(1).String()
+		content := call.Argument(2).String()
+		written, err := r.host.WriteTextFile(path, fileName, content)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return vm.ToValue(written)
+	})
+	_ = fsObj.Set("saveText", func(call goja.FunctionCall) goja.Value {
+		var params struct {
+			Title    string       `json:"title"`
+			FileName string       `json:"fileName"`
+			Content  string       `json:"content"`
+			Filters  []FileFilter `json:"filters"`
+		}
+		arg := call.Argument(0)
+		if arg == nil || goja.IsUndefined(arg) || goja.IsNull(arg) {
+			panic(vm.NewTypeError("toolbox.fs.saveText 需要一个参数对象"))
+		}
+		encoded, err := json.Marshal(arg.Export())
+		if err != nil {
+			panic(vm.NewGoError(fmt.Errorf("参数无法序列化: %w", err)))
+		}
+		if err := json.Unmarshal(encoded, &params); err != nil {
+			panic(vm.NewTypeError("参数字段非法: " + err.Error()))
+		}
+		if strings.TrimSpace(params.Content) == "" {
+			panic(vm.NewTypeError("toolbox.fs.saveText 需要提供 content"))
+		}
+		written, err := r.host.SaveTextFile(params.Title, params.FileName, params.Content, params.Filters)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		// 用户取消时返回空串：插件据此静默收场，不当成失败
+		result := vm.NewObject()
+		_ = result.Set("path", written)
+		_ = result.Set("cancelled", written == "")
+		return result
+	})
+	_ = toolbox.Set("fs", fsObj)
+
 	_ = toolbox.Set("crypto", crypto)
 
 	// MCP 工具运行时注册（P3 阶段消费；先收集，未启用时不影响插件）
@@ -429,6 +572,26 @@ func (r *jsRuntime) injectAPI(vm *goja.Runtime) error {
 }
 
 // decodeHTTPRequest 把 JS 对象转成 HTTPRequest。
+// httpResponseValue 把 HTTP 响应转成按 json tag 命名的 JS 对象。
+//
+// 与 toolbox.server 的返回保持一致：字段名必须是 json tag 里的小写形式，
+// 否则插件里按 resp.status / resp.body 取值拿到的是 undefined，
+// 状态码判断会整段落空。
+func httpResponseValue(vm *goja.Runtime, resp *HTTPResponse) goja.Value {
+	obj := vm.NewObject()
+	_ = obj.Set("status", resp.Status)
+
+	headers := vm.NewObject()
+	for key, value := range resp.Headers {
+		_ = headers.Set(key, value)
+	}
+	_ = obj.Set("headers", headers)
+
+	_ = obj.Set("body", resp.Body)
+	_ = obj.Set("truncated", resp.Truncated)
+	return obj
+}
+
 func decodeHTTPRequest(vm *goja.Runtime, value goja.Value) (HTTPRequest, error) {
 	var req HTTPRequest
 	if value == nil || goja.IsUndefined(value) || goja.IsNull(value) {

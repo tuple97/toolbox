@@ -1,11 +1,5 @@
 <script setup lang="ts">
-/**
- * 分段式页签（segmented control）。
- *
- * 设置页用它而不是「下划线页签」：设置页的页签是**在同一屏内切换分组**，
- * 分段控件的「一组互斥选项」语义比下划线更贴切，视觉也更紧凑。
- * 页签内容由调用方用 `v-show` 渲染（保持各分组状态，符合项目「禁用 v-if 切换」的约定）。
- */
+/** 分段式页签（segmented control） */
 import { cn } from '@/lib/utils'
 
 const props = defineProps<{
@@ -29,7 +23,7 @@ const model = defineModel<string>({ default: '' })
       :aria-selected="item.value === model"
       :class="cn(
         'rounded-md px-3 py-1 text-sm transition-colors',
-        item.value === model ? 'bg-brand text-white' : 'text-muted hover:bg-hover hover:text-text',
+        item.value === model ? 'bg-brand text-on-brand' : 'text-muted hover:bg-hover hover:text-text',
       )"
       @click="model = item.value"
     >

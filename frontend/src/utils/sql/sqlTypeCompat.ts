@@ -1,14 +1,4 @@
-/**
- * SQL 列类型兼容判定（纯数据 + 纯函数）。
- *
- * 用途：生成关联条件（`ON a.x = b.y`）时先过滤掉显然不兼容的列对
- * （`int = varchar` 这种条件即使写出来也没意义，还容易误导）。
- *
- * 只做「大类」判定，不区分长度 / 精度 / 有无符号：
- *   - 关联条件本来就要人工确认，这里只负责挡掉明显错的；
- *   - 各数据库的类型名五花八门（`bigint(20) unsigned`、`character varying(64)`、
- *     `timestamp without time zone`…），归一到大类比穷举类型名稳。
- */
+/** SQL 列类型兼容判定（纯数据 + 纯函数） */
 
 /** 类型大类 */
 export type SqlTypeFamily = 'number' | 'string' | 'time' | 'boolean' | 'json' | 'binary' | 'unknown'
@@ -61,12 +51,7 @@ export function typeFamilyOf(dataType: string | undefined): SqlTypeFamily {
   return 'unknown'
 }
 
-/**
- * 两个类型是否兼容（可以作为关联条件的两端）。
- *
- * 规则：同大类兼容；任一方类型未知时**放行**（元数据缺失不该让条件消失，
- * 由用户自己判断）；数字与布尔互相兼容（很多库里就是 0/1）。
- */
+/** 两个类型是否兼容（可以作为关联条件的两端） */
 export function typesCompatible(left: string | undefined, right: string | undefined): boolean {
   const a = typeFamilyOf(left)
   const b = typeFamilyOf(right)

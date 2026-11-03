@@ -53,8 +53,7 @@ func (h *assetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	store := h.manager.Store()
-	full, err := store.AssetPath(id, version, rel)
+	full, err := h.manager.assetPath(id, version, rel)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -73,6 +72,33 @@ func (h *assetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 
 	http.ServeFile(w, r, full)
+}
+
+// assetPath 解析插件资源的磁盘路径。
+//
+// 源码目录插件（开发者模式）在资源目录里没有版本目录，它的内容是用户的源码目录：
+// 静态地址必须落到那里，否则生产模式下一律 404，插件前端加载不起来。
+func (m *Manager) assetPath(id, version, rel string) (string, error) {
+	m.mu.RLock()
+	localDir := m.localDirs[id]
+	m.mu.RUnlock()
+	if localDir == "" {
+		return m.Store().AssetPath(id, version, rel)
+	}
+	return localAssetPath(localDir, rel)
+}
+
+// localAssetPath 把资源相对路径落到源码目录内，含越界防护。
+func localAssetPath(localDir, rel string) (string, error) {
+	clean := strings.TrimPrefix(path.Clean("/"+strings.TrimSpace(rel)), "/")
+	if clean == "" || clean == "." {
+		return "", fmt.Errorf("资源路径为空")
+	}
+	// 净化后仍以 .. 开头或中间夹 ..，说明它在试探目录之外
+	if clean == ".." || strings.HasPrefix(clean, "../") || strings.Contains(clean, "/../") {
+		return "", fmt.Errorf("资源路径非法")
+	}
+	return filepath.Join(localDir, filepath.FromSlash(clean)), nil
 }
 
 // parseAssetPath 拆分 /plugins/<id>/<version>/<rel...>。
@@ -135,12 +161,13 @@ func (m *Manager) ReadAssetText(id, version, relPath string) (string, error) {
 
 	m.mu.RLock()
 	_, installed := m.records[id]
+	localDir := m.localDirs[id]
 	m.mu.RUnlock()
 	if !installed {
 		return "", fmt.Errorf("%w: %s", ErrNotInstalled, id)
 	}
 
-	data, err := m.store.ReadAsset(id, version, clean)
+	data, err := readPluginFile(localDir, m.store, id, version, clean)
 	if err != nil {
 		return "", err
 	}

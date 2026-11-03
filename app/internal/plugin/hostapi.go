@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -55,6 +56,20 @@ type HostEnv interface {
 	CallPlugin(ctx context.Context, callerID, targetID, handler string, args json.RawMessage) (json.RawMessage, error)
 	// EnabledPlugins 已启用插件概览
 	EnabledPlugins() []PluginSummary
+	// PromptSaveFile 弹出系统的「另存为」对话框，返回用户确认的绝对路径。
+	//
+	// 取消时返回空串与 nil 错误。路径刻意留在宿主侧：插件后端的
+	// toolbox.fs.saveText 会直接拿这里返回的路径写盘，插件本身既拿不到、
+	// 也伪造不了写入位置。
+	PromptSaveFile(title, defaultFileName string, filters []FileFilter) (string, error)
+}
+
+// FileFilter 系统文件对话框的类型过滤项。
+type FileFilter struct {
+	// DisplayName 展示名，例如「Excel 文件」
+	DisplayName string
+	// Pattern 分号分隔的扩展名通配，例如 `*.xls;*.xlsx`
+	Pattern string
 }
 
 // maxCallDepth 单个插件自身允许的最大嵌套调用深度。
@@ -69,6 +84,12 @@ type HTTPRequest struct {
 	URL     string            `json:"url"`
 	Headers map[string]string `json:"headers,omitempty"`
 	Body    string            `json:"body,omitempty"`
+	// ResponseEncoding 响应体的编码方式：留空按文本返回，"base64" 返回
+	// base64 编码后的响应体。
+	//
+	// 图片等二进制内容必须用它：默认路径会把字节按 UTF-8 解码成字符串，
+	// 无法还原的数据在转换时就已经丢了。
+	ResponseEncoding string `json:"responseEncoding,omitempty"`
 }
 
 // HTTPResponse HTTP 响应结果。
@@ -312,10 +333,17 @@ func (h *HostBridge) HTTPFetch(req HTTPRequest) (*HTTPResponse, error) {
 		headers[k] = resp.Header.Get(k)
 	}
 
+	// 默认按文本返回；显式要求 base64 时把原始字节编码后返回，
+	// 供插件处理图片等二进制内容（再解码回去就是无损的）
+	body := string(raw)
+	if strings.EqualFold(strings.TrimSpace(req.ResponseEncoding), "base64") {
+		body = base64.StdEncoding.EncodeToString(raw)
+	}
+
 	return &HTTPResponse{
 		Status:    resp.StatusCode,
 		Headers:   headers,
-		Body:      string(raw),
+		Body:      body,
 		Truncated: truncated,
 	}, nil
 }

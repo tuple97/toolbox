@@ -1,14 +1,4 @@
-/**
- * SQL 模板可插入的片段库。
- *
- * 说明：
- *  - 片段内容全部基于后端的 text/template 模板语法，
- *    变量名用户不写点号（预处理会自动补成 `{{ .变量 }}`）。
- *  - 自定义函数由 `internal/utils/tplfunc.go` 注册：
- *    quote / upper / lower / default / join / now / in。
- *  - 其余为 text/template 内置函数（and/or/not/len/eq/ne/lt/le/gt/ge/printf/index/slice 等）。
- *  - `变量` 是片段里的占位词，插入后会被自动选中，方便直接改写。
- */
+/** SQL 模板可插入的片段库 */
 
 export interface SqlSnippet {
   /** 唯一标识 */
@@ -21,13 +11,7 @@ export interface SqlSnippet {
   code: string
   /** 用法说明 */
   description: string
-  /**
-   * 示例。
-   *
-   * 表名 / 列名一律用 `table_name` / `column_name` / `value_list` 这类**占位名**，
-   * 不写具体业务名（`device` / `user` 那种）：示例的作用是演示模板语法，
-   * 带业务名会让人以为片段只适配那类表，也容易照抄出一段跑不通的 SQL。
-   */
+  /** 示例 */
   example: string
 }
 

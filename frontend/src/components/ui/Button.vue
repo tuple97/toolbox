@@ -25,14 +25,14 @@ const button = cva(
   {
     variants: {
       variant: {
-        default: 'bg-brand text-white hover:opacity-90',
+        default: 'bg-brand text-on-brand hover:opacity-90',
         secondary: 'border border-border bg-surface text-text hover:bg-hover',
         outline: 'border border-border text-text hover:bg-hover',
         ghost: 'text-muted hover:bg-hover hover:text-text',
         danger: 'border border-danger/35 bg-danger/10 text-danger hover:bg-danger/20',
       },
       size: {
-        sm: 'h-[calc(26px*var(--app-control-scale))] px-2 text-xs',
+        sm: 'h-[calc(28px*var(--app-control-scale))] px-2 text-xs',
         default: 'h-[calc(32px*var(--app-control-scale))] px-3 text-sm',
         lg: 'h-[calc(38px*var(--app-control-scale))] px-4 text-base',
         icon: 'size-[calc(30px*var(--app-control-scale))]',

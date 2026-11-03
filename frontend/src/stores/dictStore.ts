@@ -15,10 +15,7 @@ export const useDictStore = defineStore('dictionaries', () => {
   const loaded = ref(false)
   const error = ref('')
 
-  /**
-   * 词典 ID → (原始值 → 词典项) 的映射。
-   * 翻译时按单元格高频查询，预建索引避免每次遍历数组。
-   */
+  /** 词典 ID → (原始值 → 词典项) 的映射，预建索引避免每次遍历数组 */
   const valueIndex = computed(() => {
     const index: Record<number, Map<string, DictionaryItem>> = {}
     for (const [dictId, list] of Object.entries(items.value)) {
@@ -60,10 +57,7 @@ export const useDictStore = defineStore('dictionaries', () => {
     }
   }
 
-  /**
-   * 查询词典项。
-   * 返回 undefined 表示未命中，调用方可据此决定展示原始值。
-   */
+  /** 查询词典项；未命中返回 undefined */
   function lookup(dictionaryId: number, value: unknown): DictionaryItem | undefined {
     if (!dictionaryId) {
       return undefined

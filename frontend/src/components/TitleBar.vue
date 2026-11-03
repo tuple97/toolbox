@@ -92,9 +92,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <!-- 拖拽区：可点击元素需声明 no-drag，见 .titlebar__controls -->
   <header
     class="titlebar"
-    :class="{ 'titlebar--maximised': maximised }"
     @dblclick="handleDoubleClick"
     @contextmenu="handleContextMenu"
   >
@@ -191,7 +191,7 @@ onBeforeUnmount(() => {
   user-select: none;
   -webkit-user-select: none;
 
-  /* 交给 Wails 原生机制处理拖动；刻意不声明 cursor */
+  /* 交给 Wails 处理拖动 */
   --wails-draggable: drag;
 }
 
@@ -288,11 +288,11 @@ onBeforeUnmount(() => {
 }
 
 .titlebar__btn--close:hover {
-  background: #e81123;
-  color: #fff;
+  background: var(--color-danger-strong);
+  color: var(--color-on-brand);
 }
 
 .titlebar__btn--close:active {
-  background: #c50f1f;
+  background: var(--color-danger-strong-hover);
 }
 </style>

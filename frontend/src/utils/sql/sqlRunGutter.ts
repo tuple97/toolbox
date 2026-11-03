@@ -1,18 +1,4 @@
-/**
- * 语句运行按钮：编辑器最左侧 gutter 里给**每条语句**一个按钮。
- *
- * 与「当前语句边框」配套——边框划出这条语句的范围，按钮让你直接跑它。
- * 按钮同时兼作状态灯：
- *
- *   ▶ 未执行   ⟳ 执行中   ✓ 成功   ✕ 失败   ⊘ 已取消
- *
- * 状态放在编辑器的 StateField 里、由 StateEffect 更新：调用方在开始/结束执行时
- * 各 dispatch 一次即可，gutter 自己会重绘，不需要外部再通知视图，
- * 也不会因为切标签页（编辑器被 v-show 隐藏）而丢失。
- *
- * **键取语句文本**（trim 后）：语句被改写就自然失配、旧状态不再显示；
- * 而在别处增删语句不会让状态错位（行号、下标都会错位）。
- */
+/** 语句运行按钮：编辑器最左侧 gutter 里给**每条语句**一个按钮 */
 import type { Extension } from '@codemirror/state'
 import { RangeSet, StateEffect, StateField } from '@codemirror/state'
 import { EditorView, GutterMarker, gutter } from '@codemirror/view'
@@ -60,10 +46,7 @@ export interface RunGutterOptions {
   onRun: (statement: RunnableStatement) => void
 }
 
-/*
- * 图标用内联 SVG：gutter marker 返回的是原生 DOM，拿不到 Vue 的图标组件；
- * 颜色统一走 currentColor，由 CSS 按状态着色。
- */
+/* 图标用内联 SVG：gutter marker 返回的是原生 DOM，拿不到 Vue 的图标组件 */
 const ICON_RUN = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M5.2 3.2v9.6L12.6 8z"/></svg>'
 const ICON_RUNNING = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" class="cm-sql-run-spin"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="9 27"/></svg>'
 const ICON_SUCCESS = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M3.4 8.6l3 3 6.2-6.4"/></svg>'
@@ -94,12 +77,7 @@ class RunButtonMarker extends GutterMarker {
     super()
   }
 
-  /**
-   * 状态、位置、语句文本都没变才复用 DOM。
-   *
-   * 三项缺一不可：按钮把语句信息闭包在里面，只要位置或文本变了就必须重建，
-   * 否则点击时会拿着旧的偏移或旧的 SQL 去执行。
-   */
+  /** 状态、位置、语句文本都没变才复用 DOM */
   eq(other: RunButtonMarker): boolean {
     return this.state === other.state
       && this.statement.from === other.statement.from
@@ -134,11 +112,7 @@ class RunButtonSpacer extends GutterMarker {
   }
 }
 
-/**
- * 语句运行按钮扩展。
- *
- * 放在行号 gutter **之前**即可显示在行号左边（gutter 按扩展顺序排列）。
- */
+/** 语句运行按钮扩展 */
 export function sqlStatementRunGutter(options: RunGutterOptions): Extension {
   const dialectOf = () => options.dbType?.() ?? ''
 

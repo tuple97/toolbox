@@ -1,17 +1,4 @@
-/**
- * 数据库可见性策略（Database Visibility Policy）。
- *
- * 「隐藏系统库」是一条**展示策略**，不是解析规则：
- *  - 关掉之后，库下拉框与补全候选不再主动列出系统库；
- *  - 但显式手写 `mysql.user` / `information_schema.tables` 仍然照常解析 ——
- *    resolver 根本不认识这个设置（隐藏 ≠ 非法）。
- *
- * 两件事必须在**同一处**判定，否则迟早出现「补全里没有、下拉里有」这种
- * 自相矛盾的状态：库下拉框、库名候选、schema 候选全部走这里的函数。
- *
- * 「什么算系统库」由方言决定（相当于各自 adapter 的职责），
- * **不靠 `name.startsWith('sys')` 猜** —— 那会把用户的 `sys_logs` 也一起藏掉。
- */
+/** 数据库可见性策略（Database Visibility Policy） */
 import type { SqlDialect } from './rowSql'
 
 /** 各方言自带的系统库 / 系统 schema（小写） */
@@ -48,14 +35,7 @@ export function isDatabaseVisible(
   return showSystemDatabases || !isSystemDatabase(name, dialect)
 }
 
-/**
- * 库项（结构化类型）：名字 + 可选的「系统库」标记。
- *
- * 标记来自后端（`ListDatabases` 的 `isSystem`，由适配层按方言判定）；
- * 缺失时退回按名字 + 方言表判断，于是只给名字的场景（老绑定、单测）照样能用。
- * 用结构化类型而不是 import `@/types`，是为了让本模块保持零依赖 ——
- * 策略只认「名字 + 可选标记」这两件事。
- */
+/** 库项（结构化类型）：名字 + 可选的「系统库」标记 */
 export interface DatabaseVisibilityItem {
   name: string
   isSystem?: boolean
@@ -66,12 +46,7 @@ export function isSystemDatabaseItem(item: DatabaseVisibilityItem, dialect: SqlD
   return item.isSystem ?? isSystemDatabase(item.name, dialect)
 }
 
-/**
- * 过滤一组库项（下拉框与补全候选共用，返回原对象）。
- *
- * 顺序保持原样：库列表的顺序来自数据库自己（`ORDER BY schema_name`），
- * 这里只做「去掉不可见的」，不重排 —— 用户对列表位置的记忆不该被设置项打乱。
- */
+/** 过滤一组库项（下拉框与补全候选共用，返回原对象） */
 export function filterDatabaseInfos<T extends DatabaseVisibilityItem>(
   list: readonly T[],
   dialect: SqlDialect,
@@ -96,12 +71,7 @@ export function filterDatabases(
   ).map(item => item.name)
 }
 
-/**
- * 解析设置项 `sql_show_system_databases`。
- *
- * 默认**显示**（与改造前的行为一致，用户已有的习惯不变）；
- * 只有明确写成 `false` 才隐藏，其余（缺失 / 脏值）都按显示处理。
- */
+/** 解析设置项 `sql_show_system_databases` */
 export function parseShowSystemDatabases(raw: string | undefined): boolean {
   return raw !== 'false'
 }

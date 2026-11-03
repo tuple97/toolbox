@@ -1,9 +1,4 @@
-/**
- * 应用内更新 API。
- *
- * 状态以 `UpdateSnapshot` 为准（后端权威）；`wails:updater:*` 事件只当
- * 「状态可能变了」的通知，收到后回后端重新拉快照，前端不自己推断状态。
- */
+/** 应用内更新 API */
 import {
   CancelUpdate,
   CheckUpdate,
@@ -71,10 +66,7 @@ export async function fetchUpdateSnapshot(): Promise<UpdateSnapshot> {
   }
 }
 
-/**
- * 检查新版本。
- * 后端已有流程在跑时直接返回（不打断），所以这里可能什么都没发生。
- */
+/** 检查新版本 */
 export function checkUpdate(): Promise<void> {
   return CheckUpdate()
 }

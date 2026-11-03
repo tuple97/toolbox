@@ -120,7 +120,7 @@ func TestResolveReusesInstalledVersion(t *testing.T) {
 	}
 }
 
-// TestResolveUpgradesInstalledVersionOutsideRange 已安装版本不满足约束时选一个满足约束的更高版本。
+// TestResolveUpgradesInstalledVersionOutsideRange 已安装版本不满足约束时选
 func TestResolveUpgradesInstalledVersionOutsideRange(t *testing.T) {
 	a := withDependency(baseManifest("com.toolbox.a", "1.0.0"), "com.toolbox.b", "^1.4.0")
 	catalog := buildCatalog(t, a,

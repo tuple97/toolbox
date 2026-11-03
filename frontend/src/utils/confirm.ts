@@ -1,4 +1,4 @@
-/** 确认对话框（替代 Element Plus 的 ElMessageBox.confirm）：返回 boolean，取消是正常分支 */
+/** 确认对话框：返回 boolean，取消是正常分支 */
 import { readonly, ref } from 'vue'
 
 export interface ConfirmOptions {

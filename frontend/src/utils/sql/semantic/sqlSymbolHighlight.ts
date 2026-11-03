@@ -1,13 +1,4 @@
-/**
- * 光标所在符号的引用高亮：把「这个别名在哪些地方被用到」直接画出来。
- *
- * 与重命名 / 跳转定义共用同一套符号解析（`symbolOccurrencesAt`），**不另写
- * 「找同名标识符」的正则** —— 那种做法会把字符串、注释、别的作用域里的同名别名
- * 一起点亮，看着热闹，但有一处是错的就会让人不敢信。
- *
- * 代价说明：引用收集是「逐 token × 作用域解析」，每次光标移动都要跑一遍。
- * 因此对超大文档直接放弃高亮（宁可不画，也不能让输入发涩）。
- */
+/** 光标所在符号的引用高亮：把「这个别名在哪些地方被用到」直接画出来 */
 import type { Extension } from '@codemirror/state'
 import { Decoration, EditorView, ViewPlugin } from '@codemirror/view'
 import type { DecorationSet, ViewUpdate } from '@codemirror/view'
@@ -18,12 +9,7 @@ import { symbolOccurrencesAt } from './sqlSymbols'
 const DECLARATION_MARK = Decoration.mark({ class: 'cm-symbol-declaration' })
 const REFERENCE_MARK = Decoration.mark({ class: 'cm-symbol-reference' })
 
-/**
- * 超过这个字符数就不算引用集合。
- *
- * 12 万字符相当于几千行 SQL：到这个量级，光标每动一下都重算一遍引用不值得，
- * 而重命名 / 跳转这类「用户主动发起」的动作仍照常可用（它们不在这里）。
- */
+/** 超过这个字符数就不算引用集合 */
 const MAX_HIGHLIGHT_LENGTH = 120_000
 
 export interface SymbolHighlightOptions {

@@ -3,12 +3,55 @@ package plugin
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"toolbox/app/internal/semver"
 )
+
+// localSourcePrefix 本地目录源的地址前缀。
+//
+// 用与 http(s) 平行的写法（file://）而不是裸路径：来源列表里一眼能看出
+// 「这是本机目录」，也不与未来可能出现的其它协议混淆。
+const localSourcePrefix = "file://"
+
+// isLocalSourceURL 报告来源地址是否为本地目录。
+func isLocalSourceURL(url string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(url)), localSourcePrefix)
+}
+
+// localSourceDir 把 file:// 地址还原成文件系统路径。
+//
+// 兼容三种常见写法：file:///D:/repo、file://D:/repo、file:///home/repo。
+func localSourceDir(url string) string {
+	raw := strings.TrimSpace(url)
+	if !isLocalSourceURL(raw) {
+		return ""
+	}
+	rest := strings.TrimSpace(raw[len(localSourcePrefix):])
+	if rest == "" {
+		return ""
+	}
+	withoutSlash := strings.TrimPrefix(rest, "/")
+	// Windows 盘符：去掉前导斜杠后是 D:/xxx
+	if len(withoutSlash) >= 2 && withoutSlash[1] == ':' {
+		return filepath.FromSlash(withoutSlash)
+	}
+	// 其余按原样处理：Unix 的绝对路径需要保留前导斜杠
+	return filepath.FromSlash(rest)
+}
+
+// localSourceURL 把绝对路径编码成 file:// 地址（统一成正斜杠）。
+func localSourceURL(dir string) string {
+	abs := dir
+	if resolved, err := filepath.Abs(dir); err == nil {
+		abs = resolved
+	}
+	return localSourcePrefix + filepath.ToSlash(abs)
+}
 
 // 索引缓存策略。
 const (
@@ -94,8 +137,19 @@ func NormalizeSources(sources []RegistrySource) ([]RegistrySource, error) {
 		if url == "" {
 			return nil, fmt.Errorf("插件源地址不能为空")
 		}
-		if !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "http://") {
-			return nil, fmt.Errorf("插件源地址必须以 http:// 或 https:// 开头: %s", url)
+		if isLocalSourceURL(url) {
+			// 本地目录源：规范成绝对路径，顺便确认目录还在
+			dir := localSourceDir(url)
+			if dir == "" {
+				return nil, fmt.Errorf("本地插件源缺少目录路径: %s", url)
+			}
+			info, err := os.Stat(dir)
+			if err != nil || !info.IsDir() {
+				return nil, fmt.Errorf("本地插件源目录不存在: %s", dir)
+			}
+			url = localSourceURL(dir)
+		} else if !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "http://") {
+			return nil, fmt.Errorf("插件源地址必须是 http(s):// 或 file:// 开头: %s", url)
 		}
 		if _, dup := seen[url]; dup {
 			return nil, fmt.Errorf("插件源地址重复: %s", url)
@@ -202,7 +256,16 @@ func (m *Manager) ensureSourceIndex(ctx context.Context, src RegistrySource, for
 		verified bool
 		err      error
 	)
-	if m.isOfficialURL(src.URL) {
+	if isLocalSourceURL(src.URL) {
+		/* 本地目录源：没有索引文件，直接扫目录得到条目 */
+		if !m.devMode.Load() {
+			index, verified, err = nil, false, fmt.Errorf(
+				"%w: 本地插件源需要先开启「开发者模式」（设置 → 高级）", ErrSourceUnavailable)
+		} else {
+			index, err = m.scanLocalSource(src.URL)
+			verified = false
+		}
+	} else if m.isOfficialURL(src.URL) {
 		// 官方源：配了公钥就必须验签通过
 		index, verified, err = m.client.FetchIndexAt(ctx, src.URL, m.client.Provider().SignatureURL, true)
 	} else {
@@ -267,6 +330,61 @@ func (m *Manager) ensureSources(ctx context.Context, urls []string, force bool) 
 //
 // 为什么显式点选的来源即使未启用也要拉：设置里可以浏览未启用的来源，
 // 用户看到想装的插件时不该被「来源没启用」拦住 —— 他点的就是这一条。
+// scanLocalSource 扫描本地目录源，把每个插件目录转成索引条目。
+//
+// 支持两种布局：目录本身就是插件集合，或仓库根目录（下面有 plugins/）。
+// 单个插件清单损坏只跳过它，不影响整个来源 —— 本地源里经常一半在改。
+func (m *Manager) scanLocalSource(url string) (*RegistryIndex, error) {
+	dir := localSourceDir(url)
+	if dir == "" {
+		return nil, fmt.Errorf("%w: 本地插件源路径无效: %s", ErrSourceUnavailable, url)
+	}
+	dirs := collectPluginDirs(dir)
+	if len(dirs) == 0 {
+		return nil, fmt.Errorf("%w: 目录下没有找到插件（需要包含 %s 的子目录）: %s",
+			ErrSourceUnavailable, ManifestFileName, dir)
+	}
+
+	index := &RegistryIndex{
+		SchemaVersion: RegistrySchemaVersion,
+		UpdatedAt:     time.Now().Format(time.RFC3339),
+		Plugins:       make([]RegistryEntry, 0, len(dirs)),
+	}
+	skipped := 0
+	for _, sub := range dirs {
+		mf, err := LoadManifest(sub)
+		if err != nil {
+			skipped++
+			continue
+		}
+		index.Plugins = append(index.Plugins, RegistryEntry{
+			ID:           mf.ID,
+			Name:         mf.Name,
+			Version:      mf.Version,
+			Publisher:    mf.Publisher,
+			Description:  mf.Description,
+			Icon:         mf.Icon,
+			Homepage:     mf.Homepage,
+			License:      mf.License,
+			Author:       mf.Author,
+			SourceDir:    filepath.Base(sub),
+			Download:     localSourceURL(sub),
+			Engines:      mf.Engines,
+			Dependencies: mf.Dependencies,
+			Permissions:  mf.Permissions,
+			Runtime:      mf.Runtime,
+			Contributes:  mf.Contributes,
+		})
+	}
+	if len(index.Plugins) == 0 {
+		return nil, fmt.Errorf("%w: 找到 %d 个插件目录，但没有一个能读出合法清单: %s",
+			ErrSourceUnavailable, skipped, dir)
+	}
+
+	sort.SliceStable(index.Plugins, func(i, j int) bool { return index.Plugins[i].ID < index.Plugins[j].ID })
+	return index, nil
+}
+
 func (m *Manager) ensureSourcesForInstall(ctx context.Context, explicit []string, force bool) ([]sourceIndexView, map[string]error) {
 	m.indexMu.Lock()
 	wanted := make([]string, 0, len(m.sources)+len(explicit))

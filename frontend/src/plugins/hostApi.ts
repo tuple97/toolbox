@@ -1,13 +1,4 @@
-/**
- * 插件前端宿主 API。
- *
- * 两条共享通道：
- *   1. window.__TOOLBOX__：全局共享运行时（Vue 实例、UI 组件库、工具函数）。
- *      插件产物把 `vue` 声明为 external，运行时从这里取，
- *      保证整个应用只有一个 Vue 实例（多实例会破坏响应式与组件复用）。
- *   2. activate(api)：每个插件专属的上下文，绑定其 pluginId，
- *      使 invoke / storage / 事件隔离到插件自己的命名空间。
- */
+/** 插件前端宿主 API：共享运行时（window.__TOOLBOX__）与插件专属上下文 activate(api) */
 
 import type { Component } from 'vue'
 import * as VueRuntime from 'vue'
@@ -31,6 +22,8 @@ import Tabs from '@/components/ui/Tabs.vue'
 import TabGroup from '@/components/ui/TabGroup.vue'
 import Tag from '@/components/ui/Tag.vue'
 import { invokePlugin, getPluginSetting, setPluginSetting } from '@/api/plugins'
+import { pickFiles, pickSaveFile } from '@/api/dialog'
+import type { FileFilterOption } from '@/api/dialog'
 import { EventsEmit, EventsOn, openExternalUrl } from '@/api/runtime'
 import { notify } from '@/utils/notify'
 import { buildHostModules } from '@/plugin-sdk'
@@ -47,7 +40,7 @@ const ui: Record<string, Component> = {
   Checkbox,
   ColorInput,
   Combobox,
-  // DataTable 是泛型组件，其函数签名与通用的 Component 类型不兼容，这里显式放宽
+  // DataTable 是泛型组件，签名与 Component 不兼容，这里显式放宽
   DataTable: DataTable as unknown as Component,
   DateInput,
   Dialog,
@@ -66,7 +59,7 @@ const ui: Record<string, Component> = {
 
 /** 插件注册工具的参数 */
 export interface PluginToolRegistration {
-  /** 工具类型，需与清单 contributes.tools[].type 一致且全局唯一 */
+  /** 工具类型，需与清单 contributes.tools[].type 一致且唯一 */
   type: string
   /** 菜单与标签展示名 */
   label: string
@@ -106,6 +99,17 @@ export interface PluginHostCapabilities {
   openExternal: (url: string) => void
   /** 生成插件自身静态资源的 URL */
   assetUrl: (relPath: string) => string
+  /** 选择文件并返回绝对路径；取消时返回空数组 */
+  pickFiles: (
+    title: string,
+    filters?: FileFilterOption[],
+  ) => Promise<string[]>
+  /** 弹出「另存为」对话框并返回绝对路径；取消时返回空串 */
+  pickSaveFile: (
+    title: string,
+    defaultFileName?: string,
+    filters?: FileFilterOption[],
+  ) => Promise<string>
 }
 
 /** 传给插件 activate() 的上下文 */
@@ -126,12 +130,7 @@ export interface PluginFrontendApi {
   /** 注册一个工具视图 */
   registerTool: (definition: PluginToolRegistration) => void
 
-  /**
-   * 注册一个自定义设置面板。
-   *
-   * 面板会出现在设置页的页签里；简单配置项直接用清单的
-   * contributes.settings 声明即可，宿主会自动渲染表单。
-   */
+  /** 注册一个自定义设置面板 */
   registerSettingsPanel: (definition: PluginSettingsPanelRegistration) => void
 
   /** 写日志（输出到浏览器控制台） */
@@ -148,12 +147,7 @@ export interface PluginSettingsPanelRegistration {
   component: Component
 }
 
-/**
- * 安装全局共享运行时到 window.__TOOLBOX__。
- *
- * 插件产物对 `vue` 等共享依赖做了 external 处理，
- * 运行时统一从这里取，避免重复打包与多实例问题。
- */
+/** 安装全局共享运行时到 window.__TOOLBOX__ */
 export function installSharedRuntime(assetBase: string): void {
   const globals = window as unknown as Record<string, unknown>
 
@@ -166,8 +160,7 @@ export function installSharedRuntime(assetBase: string): void {
     openExternal: openExternalUrl,
   }
 
-  // 宿主内部模块表：按 `@/...` 原路径索引，供官方插件复用宿主内核
-  // （构建期会插件里的 `@/xxx` 导入改写成从这里取，见工具箱仓库的构建工具）
+  // 宿主内部模块表，供官方插件复用宿主内核
   globals.__TOOLBOX_HOST__ = buildHostModules()
 }
 
@@ -192,8 +185,7 @@ export function createPluginApi(plugin: InstalledPlugin, assetBase: string): Plu
         get: (key: string) => getPluginSetting(plugin.id, key),
         set: (key: string, value: string) => setPluginSetting(plugin.id, key, value),
         all: async () => {
-          // 后端未开放「列出全部配置」的绑定，这里用约定的批量 handler 兜底：
-          // 插件若实现它即可一次性取回全部配置
+          // 后端无「列出全部配置」绑定，用约定的批量 handler 兜底
           try {
             return await invokePlugin<Record<string, string>>(plugin.id, '__listSettings', {})
           }
@@ -213,6 +205,15 @@ export function createPluginApi(plugin: InstalledPlugin, assetBase: string): Plu
       notify,
       openExternal: openExternalUrl,
       assetUrl: (relPath: string) => `${baseUrl}${relPath.replace(/^\/+/, '')}`,
+
+      pickFiles: (title: string, filters: FileFilterOption[] = []) =>
+        pickFiles(title, filters),
+
+      pickSaveFile: (
+        title: string,
+        defaultFileName = '',
+        filters: FileFilterOption[] = [],
+      ) => pickSaveFile(title, defaultFileName, filters),
     },
 
     registerTool: (definition: PluginToolRegistration) => {
@@ -224,7 +225,7 @@ export function createPluginApi(plugin: InstalledPlugin, assetBase: string): Plu
         description: definition.description ?? '',
         group: definition.group ?? '',
         order: definition.order ?? 0,
-        // 未显式指定时：多例工具进「新建标签」菜单，单例工具不进
+        // 未显式指定时：多例工具进「新建标签」菜单
         picker: definition.picker ?? Boolean(definition.multi),
         pluginId: plugin.id,
         pluginVersion: plugin.version,

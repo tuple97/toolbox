@@ -194,10 +194,7 @@ function insertSnippet(snippet: SqlSnippet) {
   min-height: 300px;
   border: 1px solid var(--border-color);
   border-radius: 12px;
-  /*
-   * 不铺底色：模板配置面板本身只有描边，卡片再铺一层品牌色淡底，就成了
-   * 「同一页只有这块是另一种颜色」。层次靠描边与列间分隔线表达。
-   */
+  /* 不铺底色：模板配置面板本身只有描边，卡片再铺一层品牌色淡底，就成了 「同一页只有这块是另一种颜色」 */
   overflow: hidden;
 }
 

@@ -36,12 +36,7 @@ function toAppStartupState(raw: { state?: unknown, error?: unknown } | undefined
   }
 }
 
-/**
- * 读取应用启动状态。
- *
- * 调用失败时按「就绪」处理：更新/初始化都没问题却弹一条故障提示，
- * 比漏报更打扰用户。
- */
+/** 读取应用启动状态 */
 export async function fetchAppStartupState(): Promise<AppStartupState> {
   try {
     return toAppStartupState(await GetAppStartupState())

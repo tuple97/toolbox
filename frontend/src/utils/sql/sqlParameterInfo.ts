@@ -1,16 +1,4 @@
-/**
- * 函数参数提示的位置判定（Ctrl+P 的「我在哪个函数的第几个参数里」）。
- *
- * 只做位置解析，不做 UI：输入纯文本与光标位置，输出「命中的函数元数据 +
- * 当前参数下标 + 左括号位置」，可在 node 环境直接测。UI（浮层）在 CodeEditor。
- *
- * 解析是**反向扫描**（与 sqlCursor 的子句扫描同一套路）：从光标往左走，
- * 维护括号深度、跳过字符串与注释；遇到第一个「深度归零的左括号」就是
- * 当前参数列表的开头，读它左边的标识符查函数目录 —— 不在目录里
- * （`IN (`、`VALUES (`、普通标识符）就不提示，绝不硬猜。
- *
- * 当前参数下标 = 左括号到光标之间的**顶层逗号数**（相对该括号的深度）。
- */
+/** 函数参数提示的位置判定（Ctrl+P 的「我在哪个函数的第几个参数里」） */
 import { skipQuotedBackward } from './sqlCursor'
 import { functionDocOf } from './functionCatalog'
 import type { SqlFunctionDoc } from './functionCatalog'

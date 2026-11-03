@@ -209,19 +209,20 @@ onBeforeUnmount(() => {
     </button>
 
     <Teleport to="body">
-      <div
-        v-if="open"
-        ref="list"
-        tabindex="-1"
-        class="fixed z-[9996] overflow-hidden rounded-lg border border-border bg-overlay
-          shadow-[var(--shadow-md)] outline-none"
-        :style="{
-          left: `${position.left}px`,
-          top: `${position.top}px`,
-          width: `${position.width}px`,
-        }"
-        @keydown="onKeydown"
-      >
+      <Transition name="app-pop">
+        <div
+          v-if="open"
+          ref="list"
+          tabindex="-1"
+          class="fixed z-[9996] overflow-hidden rounded-lg border border-border bg-overlay
+            shadow-[var(--shadow-md)] outline-none"
+          :style="{
+            left: `${position.left}px`,
+            top: `${position.top}px`,
+            width: `${position.width}px`,
+          }"
+          @keydown="onKeydown"
+        >
         <div v-if="filterable" class="border-b border-border p-1.5">
           <input
             ref="search"
@@ -257,7 +258,8 @@ onBeforeUnmount(() => {
             没有匹配项
           </p>
         </div>
-      </div>
+        </div>
+      </Transition>
     </Teleport>
   </div>
 </template>

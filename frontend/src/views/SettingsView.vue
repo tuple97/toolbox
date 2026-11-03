@@ -9,6 +9,7 @@ import Input from '@/components/ui/Input.vue'
 import Slider from '@/components/ui/Slider.vue'
 import Switch from '@/components/ui/Switch.vue'
 import Tag from '@/components/ui/Tag.vue'
+import { pickDirectories } from '@/api/dialog'
 import { fetchSystemFonts } from '@/api/fonts'
 import { openExternalUrl } from '@/api/plugins'
 import { useConfigStore } from '@/stores/configStore'
@@ -17,7 +18,7 @@ import { useMetadataStore } from '@/stores/metadataStore'
 import { usePluginStore } from '@/stores/pluginStore'
 import { useUpdateStore } from '@/stores/updateStore'
 import { installUpdate } from '@/utils/appUpdate'
-import { buildFontOptions } from '@/utils/fonts'
+import { BUILTIN_EN_FONT, buildFontOptions } from '@/utils/fonts'
 import { notify } from '@/utils/notify'
 import { pendingSettingPanel } from '@/utils/settingsNav'
 import { SQL_TRIGGER_MODE_OPTIONS, parseSqlTriggerMode } from '@/utils/sql/sqlCompletionTrigger'
@@ -55,12 +56,7 @@ interface SettingNavGroup {
   items: SettingNavItem[]
 }
 
-/**
- * 左侧多级菜单结构。
- *
- * 只放工具箱自身的设置；插件设置由插件卡片右键菜单的「配置」弹窗承载，
- * 因此这里的分组不会随插件启停变化。
- */
+/** 左侧多级菜单结构 */
 const SETTING_GROUPS: SettingNavGroup[] = [
   {
     id: 'interface',
@@ -117,12 +113,7 @@ function selectTab(id: string): void {
   }
 }
 
-/*
- * 别的页面跳过来时按目标面板定位（例如插件市场点「管理来源」）。
- *
- * 用 immediate 是因为存在两种时序：设置页还没挂载时目标先写入，
- * 挂载后要立刻用上；已经挂载时则由 watch 实时响应。
- */
+/* 别的页面跳过来时按目标面板定位（例如插件市场点「管理来源」） */
 watch(pendingSettingPanel, (id) => {
   if (!id) {
     return
@@ -182,9 +173,15 @@ const fontFamilyZh = computed({
 /** 本机已安装字体 */
 const systemFonts = ref<string[]>([])
 
-/** 字体下拉选项：内置字体 + 本机字体，中英两档各自一份 */
+/** 界面字体选项：默认系统字体 + 本机字体 */
 const enFontChoices = computed(() => buildFontOptions(systemFonts.value, 'en'))
 const zhFontChoices = computed(() => buildFontOptions(systemFonts.value, 'zh'))
+
+/** 编辑器字体选项：默认等宽 Maple Mono + 本机字体 */
+const editorEnChoices = computed(() =>
+  buildFontOptions(systemFonts.value, 'en', BUILTIN_EN_FONT))
+const editorZhChoices = computed(() =>
+  buildFontOptions(systemFonts.value, 'zh', BUILTIN_EN_FONT))
 
 // ---------------------------------------------------------------- 编辑器
 
@@ -339,6 +336,11 @@ async function addPluginSource(): Promise<void> {
     notify.warning('请填写插件源地址')
     return
   }
+  // 本地目录源等价于源码安装，同样受开发者模式约束（后端还会再拦一次）
+  if (url.toLowerCase().startsWith('file://') && !pluginStore.developerMode) {
+    notify.warning('本地目录源需要先在「高级」里开启开发者模式')
+    return
+  }
   if (pluginSources.value.some(source => source.url === url)) {
     notify.warning('该插件源已存在')
     return
@@ -355,6 +357,41 @@ async function addPluginSource(): Promise<void> {
   catch (e) {
     notify.error(e instanceof Error ? e.message : String(e))
   }
+}
+
+/** 选择一个本地目录作为插件源 */
+async function pickLocalPluginSource(): Promise<void> {
+  if (!pluginStore.developerMode) {
+    notify.warning('本地目录源需要先在「高级」里开启开发者模式')
+    return
+  }
+  try {
+    const dirs = await pickDirectories('选择插件仓库目录（含 plugins/）或插件目录')
+    const dir = dirs[0]
+    if (!dir) {
+      return
+    }
+    const normalized = dir.replace(/\\/g, '/').replace(/\/+$/, '')
+    newSourceUrl.value = `file://${normalized}`
+    // 名字默认取最后一级目录名，比一串路径好认
+    if (!newSourceName.value.trim()) {
+      const segments = normalized.split('/')
+      newSourceName.value = segments[segments.length - 1] ?? ''
+    }
+  }
+  catch (e) {
+    notify.error(e instanceof Error ? e.message : String(e))
+  }
+}
+
+/** 是否为本地目录源（file:// 开头的地址） */
+function isLocalSource(source: PluginRegistrySource): boolean {
+  return source.url.toLowerCase().startsWith('file://')
+}
+
+/** 本地源在界面上显示成路径，去掉协议前缀 */
+function sourcePathOf(source: PluginRegistrySource): string {
+  return isLocalSource(source) ? source.url.slice('file://'.length) : source.url
 }
 
 /** 删除一个插件源 */
@@ -387,6 +424,17 @@ function pickPluginSource(source: PluginRegistrySource): void {
   void pluginStore.loadSourceSnapshot(source.url)
 }
 
+/** 开关开发者模式：后端持久化并即时生效，前端只做状态镜像 */
+async function toggleDeveloperMode(enabled: boolean): Promise<void> {
+  try {
+    await pluginStore.updateDeveloperMode(enabled)
+    notify.success(enabled ? '开发者模式已开启' : '开发者模式已关闭')
+  }
+  catch (e) {
+    notify.error(e instanceof Error ? e.message : String(e))
+  }
+}
+
 /** 在系统浏览器里打开来源的索引地址 */
 async function openSourceLink(source: PluginRegistrySource): Promise<void> {
   try {
@@ -407,6 +455,8 @@ function refreshSourcePreview(): void {
 onMounted(async () => {
   // 打开本页时对齐一次权威状态：即便更新早就开始（启动自动检查），这里也能看到
   void updateStore.refresh()
+  // 开发者模式的权威状态在后端，进页面时对齐一次
+  void pluginStore.loadDeveloperMode()
   // 插件源列表是本地读取，先拉一次并顺带预览第一个来源
   void pluginStore.loadSources().then(() => {
     if (pluginStore.previewSourceUrl) {
@@ -484,7 +534,7 @@ onBeforeUnmount(() => {
             <Combobox v-model="uiScale" :options="scaleChoices" />
           </Field>
 
-          <Field label="界面字体 · 英文">
+          <Field label="英文字体">
             <Combobox
               v-model="fontFamily"
               :options="enFontChoices"
@@ -492,7 +542,7 @@ onBeforeUnmount(() => {
             />
           </Field>
 
-          <Field label="界面字体 · 中文">
+          <Field label="中文字体">
             <Combobox
               v-model="fontFamilyZh"
               :options="zhFontChoices"
@@ -503,18 +553,18 @@ onBeforeUnmount(() => {
 
         <!-- 编辑器 -->
         <section v-show="activeTab === 'editor'" class="space-y-1">
-          <Field label="编辑器字体 · 英文">
+          <Field label="英文字体">
             <Combobox
               v-model="editorFontFamily"
-              :options="enFontChoices"
+              :options="editorEnChoices"
               search-placeholder="搜索字体…"
             />
           </Field>
 
-          <Field label="编辑器字体 · 中文">
+          <Field label="中文字体">
             <Combobox
               v-model="editorFontFamilyZh"
-              :options="zhFontChoices"
+              :options="editorZhChoices"
               search-placeholder="搜索字体…"
             />
           </Field>
@@ -544,6 +594,23 @@ onBeforeUnmount(() => {
 
         <!-- 高级 -->
         <section v-show="activeTab === 'advanced'" class="space-y-1">
+          <!--
+            开发者模式：放宽安装校验（源码目录 + 跳过信任确认）。
+            关闭时只接受已编译产物，因此这里必须把代价讲清楚。
+          -->
+          <Field label="开发者模式">
+            <div class="developer-mode">
+              <Switch
+                :model-value="pluginStore.developerMode"
+                @update:model-value="toggleDeveloperMode"
+              />
+              <span class="developer-mode__hint">
+                允许直接以插件源码目录作为安装源，并跳过来源信任确认。
+                关闭后只支持已编译产物的在线 / 离线安装。
+              </span>
+            </div>
+          </Field>
+
           <Field label="日志保留条数">
             <div class="flex items-center gap-3">
               <Slider v-model="logMaxLines" :min="50" :max="1000" :step="50" class="w-56" />
@@ -678,13 +745,16 @@ onBeforeUnmount(() => {
                   @click="pickPluginSource(source)"
                 >
                   <span class="plugin-sources__name">
-                    <span class="plugin-sources__label">{{ source.name || source.url }}</span>
+                    <span class="plugin-sources__label">{{ source.name || sourcePathOf(source) }}</span>
                     <!-- 官方源随宿主内置，没有删除入口；标一下免得找不到按钮 -->
                     <Tag v-if="source.official" tone="brand" effect="plain" size="sm">内置</Tag>
+                    <Tag v-else-if="isLocalSource(source)" tone="info" effect="plain" size="sm">本地目录</Tag>
                   </span>
-                  <span class="plugin-sources__url">{{ source.url }}</span>
+                  <span class="plugin-sources__url">{{ sourcePathOf(source) }}</span>
                 </button>
+                <!-- 本地目录源没有可打开的索引地址，「打开链接」对它没有意义 -->
                 <Button
+                  v-if="!isLocalSource(source)"
                   variant="ghost"
                   size="sm"
                   title="在浏览器中打开索引地址"
@@ -711,11 +781,27 @@ onBeforeUnmount(() => {
                 v-model="newSourceUrl"
                 size="sm"
                 class="plugin-sources__url-input"
-                placeholder="https://example.com/registry.json"
+                placeholder="https://example.com/registry.json 或点右侧选本地目录"
               />
               <Input v-model="newSourceName" size="sm" class="plugin-sources__name-input" placeholder="名称（可选）" />
+              <!-- 本地目录源：选仓库目录（含 plugins/）或单个插件目录 -->
+              <Button
+                variant="secondary"
+                size="sm"
+                :disabled="!pluginStore.developerMode"
+                :title="pluginStore.developerMode
+                  ? '选择一个插件仓库目录或插件目录作为来源'
+                  : '本地目录源需要先开启开发者模式'"
+                @click="pickLocalPluginSource"
+              >
+                <Icon name="folder" />
+                选目录
+              </Button>
               <Button size="sm" @click="addPluginSource">添加</Button>
             </div>
+            <p v-if="!pluginStore.developerMode" class="plugin-sources__hint">
+              本地目录源与源码安装需要先在「高级」里开启开发者模式。
+            </p>
           </div>
 
           <!-- 选中来源的插件简略列表 -->
@@ -913,13 +999,7 @@ onBeforeUnmount(() => {
   overflow-y: auto;
 }
 
-/*
- * 设置项标签：按内容自适应宽度，且永不换行。
- *
- * Field 的默认标签列是固定 7rem，像「编辑器字体 · 英文」这种中文标签
- * 在 7rem 里放不下就会折成两行，看起来像被挤扁；这里放宽下限并禁止换行，
- * 长标签由内容决定宽度，控件（flex-1）拿走剩下的空间。
- */
+/* 设置项标签：按内容自适应宽度，且永不换行 */
 .settings-view__content :deep(.field__label) {
   width: auto;
   min-width: 7rem;
@@ -943,6 +1023,27 @@ onBeforeUnmount(() => {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+/* 添加来源下方的补充说明（本地目录源需要开发者模式） */
+.plugin-sources__hint {
+  margin: 4px 0 0;
+  color: var(--color-muted);
+  font-size: var(--app-font-size-2xs);
+}
+
+/* 开发者模式：开关与说明横向排布，说明文字限宽避免长行 */
+.developer-mode {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.developer-mode__hint {
+  max-width: 34rem;
+  color: var(--color-muted);
+  font-size: var(--app-font-size-xs);
+  line-height: 1.6;
 }
 
 .plugin-sources__item {

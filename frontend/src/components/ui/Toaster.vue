@@ -1,11 +1,5 @@
 <script setup lang="ts">
-/**
- * 提示宿主（`utils/notify.ts` 的渲染端）。
- *
- * 在 App.vue 根部挂**一个**即可：提示本身是全局队列，不需要每个页面各挂一份。
- * 位置固定在右下角 —— 那里不盖工具栏、编辑器和结果区的主要视线，也远离
- * 执行器里的「执行 / 终止」按钮。
- */
+/** 提示宿主（`utils/notify.ts` 的渲染端） */
 import Icon from '@/components/ui/Icon.vue'
 import { activeNotices, dismiss } from '@/utils/notify'
 import type { NoticeTone } from '@/utils/notify'

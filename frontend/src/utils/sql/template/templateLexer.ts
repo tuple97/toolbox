@@ -1,11 +1,4 @@
-/**
- * 模板片段的词法分析。
- *
- * 把 `{{ … }}` 内部的一段文本切成 token（标识符 / 变量 / 字面量 / 管道符 /
- * 括号 / 赋值号…），供语法分析器定位「光标处在第几个命令的第几个参数」。
- *
- * 只做词法，不做语义：所有 token 都带绝对偏移，插入与替换范围直接取 token 范围。
- */
+/** 模板片段的词法分析 */
 
 /** token 类别 */
 export type TemplateTokenKind =
@@ -48,12 +41,7 @@ const IDENT_START = /[A-Za-z_]/
 /** 标识符后续字符（含数字） */
 const IDENT_PART = /[\w]/
 
-/**
- * 把片段文本切成 token。
- *
- * @param fragment 片段内容（`{{` 与 `}}` 之间的文本）
- * @param offset   片段在文档中的绝对起始下标（token 的 from/to 会带上它）
- */
+/** 把片段文本切成 token */
 export function lexTemplateFragment(fragment: string, offset: number): TemplateToken[] {
   const tokens: TemplateToken[] = []
   let index = 0

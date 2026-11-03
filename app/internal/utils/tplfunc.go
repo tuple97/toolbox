@@ -89,7 +89,7 @@ func isEmptyValue(value any) bool {
 // 用法：{{ join "','" .device_no_list }} 配合外层引号生成 'a','b'
 // 若元素需逐个加引号，建议外层使用 quote：
 //
-//	device_no in ({{ range $i, $v := .list }}{{ if $i }},{{ end }}{{ quote $v }}{{ end }})
+// device_no in ({{ range $i, $v := .list }}{{ if $i }}
 func tplJoin(sep string, value any) string {
 	switch typed := value.(type) {
 	case []any:

@@ -300,7 +300,7 @@ onBeforeUnmount(() => {
   padding: 6px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  background: var(--menu-bg);
+  background: var(--color-menu);
   box-shadow: 0 20px 45px rgba(2, 6, 23, 0.55);
   user-select: none;
   -webkit-user-select: none;

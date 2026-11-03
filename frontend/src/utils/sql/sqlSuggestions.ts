@@ -1,12 +1,4 @@
-/**
- * SQL completion candidates: clause-aware suggestions, dot completion, smart items
- * (star expansion / group-by promotion / compare values), join conditions and
- * namespace (database) completion.
- *
- * Extracted from sqlCompletion.ts. This layer consumes the cursor semantics
- * (sqlCursor.ts) plus the structure parsing result (sqlSchema.ts) and only
- * produces candidate items - it never touches the editor.
- */
+/** SQL completion candidates: clause-aware suggestions */
 import { startCompletion } from '@codemirror/autocomplete'
 import type { Completion } from '@codemirror/autocomplete'
 import type { EditorView } from '@codemirror/view'
@@ -87,12 +79,7 @@ export function columnsOfRef(ref: TableRef, deps: SqlSuggestDeps): SmartColumn[]
         }))
 }
 
-/**
- * 按限定符定位列来源。
- *
- * 没写限定符时，只有「来源唯一」或「只有一个来源含这一列」才敢归属：
- * 多来源下归属谁都是猜。
- */
+/** 按限定符定位列来源 */
 export function sourceRefOf(
   scopes: TableRef[][],
   qualifier: string,
@@ -112,13 +99,7 @@ export function sourceRefOf(
   return hit.length === 1 ? hit[0] : null
 }
 
-/**
- * GROUP BY 位置的智能项：推荐 SELECT 里**未聚合**的列。
- *
- * 按 GROUP BY 的规范，SELECT 中不带聚合函数的列就该出现在分组里，
- * 所以这些列值得排在普通列候选之前，另外给一个「一次补齐」的片段项。
- * 返回的 `skip` 交给普通列候选去重（否则同一列会出现两次）。
- */
+/** GROUP BY 位置的智能项：推荐 SELECT 里**未聚合**的列 */
 export function groupByPromotion(
   prefix: string,
   pos: number,
@@ -211,19 +192,9 @@ export interface GeneralSuggestArgs {
   prefix?: string
   /** 表名是否带自动别名（设置项开启 **且** 当前位置是 FROM / JOIN 之后） */
   autoAlias?: boolean
-  /**
-   * 上一个输出项用的限定符（`SELECT t.user_id, |` 的 `t`）。
-   *
-   * 多选列时新列要沿用它的 `t.` —— 用户写了一个带别名的列，接着勾选一批列，
-   * 期望它们属于同一个来源；不给的话就会出现 `t.user_id, id, email` 这种半截结果。
-   * 只在多选模式由宿主传入（单选时保持既有「单来源裸列名」的规则）。
-   */
+  /** 上一个输出项用的限定符（`SELECT t.user_id, |` 的 `t`） */
   preferredQualifier?: string
-  /**
-   * 补全槽位（由 sqlBundle 算出并传入）。
-   *
-   * 不传时按 intent 兜底重算（`SELECT |` 会落成宽松的 select-expression）。
-   */
+  /** 补全槽位（由 sqlBundle 算出并传入） */
   slot?: SqlCompletionSlot
 }
 
@@ -239,12 +210,7 @@ export interface SmartItemArgs {
   fragments: boolean
 }
 
-/**
- * 就地追加的智能项：`*` 展开、比较值、INSERT 列清单。
- *
- * GROUP BY 的推荐列由 groupByPromotion 单独处理（它还要参与去重），
- * 这里只负责其余三类，各自都只在「位置确实对得上」时才出现。
- */
+/** 就地追加的智能项：`*` 展开、比较值、INSERT 列清单 */
 export function smartSuggestions(args: SmartItemArgs): Completion[] {
   const items: Completion[] = []
   const refs = args.scopes[0] ?? []
@@ -278,11 +244,7 @@ export function smartSuggestions(args: SmartItemArgs): Completion[] {
     }
   }
 
-  /*
-   * ② 比较值：`col = |` / `col IN (|`。
-   * 候选由「值域数据 + 列类型」共同决定：词典里有这份数据真实出现过的值就给值，
-   * 没有值时按类型给常用写法（时间列 → 当前时间 / 今天零点，布尔列 → 真假值）。
-   */
+  /* ② 比较值：`col = |` / `col IN (|` */
   const target = comparisonTarget(args.intent.clausePrefix)
   if (target) {
     const ref = sourceRefOf(args.scopes, target.qualifier, target.column, args.columnsOf)
@@ -351,13 +313,7 @@ export function joinSideOf(ref: TableRef, deps: SqlSuggestDeps): JoinSide {
   }
 }
 
-/**
- * ON 位置的关联条件候选。
- *
- * 用当前作用域里「最后加进来的表」与其余表逐个配对：
- * `FROM users u JOIN orders o ON |` → 左值是 orders（刚写的），
- * 右值依次是 users。配不出任何条件时返回空数组（不猜）。
- */
+/** ON 位置的关联条件候选 */
 export function joinConditionSuggestions(
   scopes: TableRef[][],
   deps: SqlSuggestDeps,
@@ -386,16 +342,7 @@ function indexOfJoinTarget(sides: JoinSide[], target: { table: string, alias: st
     side.alias.toLowerCase() === alias || side.table.toLowerCase() === table)
 }
 
-/**
- * 限定符文本（含末尾点号）→ 各段名字（已去引号）；不以点号结尾返回 null。
- *
- * 支持 `u.`、`` `mydb`. ``、`` `mydb`.`t`. ``、`"db"."t".` 等写法。
- *
- * **补全链路的限定符一律走这里**：入参来自光标分析层的 `HybridCursor.qualifier`，
- * 它是从「正在输入的词的首字符」往左回看的 —— 于是 `` `db`.u| ``（点号后已经开始
- * 打前缀）也能解析出 `db`。早先只看「光标左边紧邻的是不是点号」，这种情况下
- * 库名会整段丢掉，`db.u` 就再也补不出那个库的表（退化成当前库的表）。
- */
+/** 限定符文本（含末尾点号）→ 各段名字（已去引号）；不以点号结尾返回 null */
 export function qualifierSegments(raw: string): string[] | null {
   if (!raw.endsWith('.')) {
     return null
@@ -408,12 +355,7 @@ export function qualifierSegments(raw: string): string[] | null {
   return segments.length ? segments : null
 }
 
-/**
- * 解析一行里光标前紧邻点号的限定符（保留给「只有一行文本」的调用方与用例）。
- *
- * 只看「光标左边是不是点号」：点号后已经打了前缀（`` `db`.u ``）时这里返回 null，
- * 补全路径不使用它（改用 qualifierSegments + HybridCursor.qualifier）。
- */
+/** 解析一行里光标前紧邻点号的限定符（保留给「只有一行文本」的调用方与用例） */
 export function readQualifierBeforeCursor(lineBefore: string): string[] | null {
   let index = lineBefore.length
   // 允许字母数字、_、$、点号与三种引号
@@ -423,21 +365,7 @@ export function readQualifierBeforeCursor(lineBefore: string): string[] | null {
   return qualifierSegments(lineBefore.slice(index))
 }
 
-/**
- * 点号后的补全：按「逐层别名 > 逐层无别名 CTE 名 > 显式 `库.表.` > 当前库表名 > 库名」
- * 解析限定符。
- *
- * `scopes` 由内到外排列（最内层子查询在前），所以内层的别名会遮蔽外层同名别名；
- * 每层都没命中时再落到「表名 / 库名」这类与作用域无关的规则上。
- *
- * - 命中某层的别名 → 该别名指向的库/表的字段（支持跨库与派生表/CTE）；
- * - 命中某层无别名引用的 CTE 名 → 该 CTE 的输出列；
- * - 命中 `库.表.` 这种显式两段 → 直接按该库取字段；
- * - 命中当前库的表名 → 该表字段；
- * - 命中库名 → 该库的表列表；
- * - 都没命中：仍按「当前库的表」试一次（表列表可能还在后台加载，
- *   顺带把缓存预热起来），拿不到就是空列表，不报错。
- */
+/** 点号后的补全：按「逐层别名 > 逐层无别名 CTE 名 > 显式 `库.表.` > 当前库表名 > 库名」 解析限定符 */
 export function resolveAfterDot(
   segments: string[],
   scopes: TableRef[][],
@@ -452,13 +380,7 @@ export function resolveAfterDot(
   const last = segments[segments.length - 1]
   const qualifier = last.toLowerCase()
 
-  /*
-   * 1) 逐层找别名（派生表 / CTE 的列来自静态解析，物理表走元数据）。
-   *
-   * `skipAlias` 用在**来源位置**（`FROM 库.`、`UPDATE 库.`）：那里的点号是
-   * 「库 / 模式 + 表」的限定名，用户要的是库里有哪些表；按别名解读会去查
-   * 一张名叫 `mysql` 的表的字段 —— 位置判错，结论自然也不对。
-   */
+  /* 1) 逐层找别名（派生表 / CTE 的列来自静态解析，物理表走元数据） */
   if (!options?.skipAlias) {
     for (const refs of scopes) {
       const matchedRef = refs.find(ref => (ref.alias || ref.table).toLowerCase() === qualifier)
@@ -484,10 +406,7 @@ export function resolveAfterDot(
     }
   }
 
-  /*
-   * 3) 显式两段（mydb.user.）：倒数第二段是库 / 模式名。
-   * 这是**唯一**允许绕过作用域直接查元数据的形式 —— 用户明确写出了库名。
-   */
+  /* 3) 显式两段（mydb.user.）：倒数第二段是库 / 模式名 */
   if (segments.length > 1) {
     const schema = segments[segments.length - 2]
     return columnSuggestions(
@@ -515,11 +434,7 @@ export function resolveAfterDot(
     return tableSuggestions(connId, last, deps.dialect, metadata)
   }
 
-  /*
-   * 作用域里没有这个来源，也不再「按当前库的同名表猜一次」：
-   * 那会让 `WHERE x.|` 突然冒出一张跟当前语句无关的表的字段 ——
-   * 用户感知就是「这里为什么莫名有这些字段」。想要按元数据查，写全 `库.表.`。
-   */
+  /* 作用域里没有这个来源，也不再「按当前库的同名表猜一次」： 那会让 `WHERE x.|` 突然冒出一张跟当前语句无关的表 */
   return []
 }
 
@@ -541,12 +456,7 @@ function sourceColumnSuggestions(
       )
 }
 
-/**
- * 一组列的候选（走候选池：按来源缓存，超宽表按前缀取舍）。
- *
- * `prefix` 是光标前正在输入的词（只有超宽表才会用到）；
- * `qualified` 决定展示名与插入文本是否带限定符（多来源 / 点号补全时为真）。
- */
+/** 一组列的候选（走候选池：按来源缓存，超宽表按前缀取舍） */
 export function columnSuggestions(
   columns: readonly PoolColumn[],
   source: PoolSource,
@@ -574,15 +484,7 @@ export function derivedSourceDetail(columns: VirtualColumn[]): string {
   return `派生表${from}（${columns.length} 列）`
 }
 
-/**
- * 表补全项（表名一律带引用符，插入时吃掉用户已经敲下的开引号）。
- *
- * `autoAlias` 为真（设置项开启 **且** 当前位置是 FROM / JOIN 之后）时，
- * 每张表**只给一条**带自动别名的候选（`users AS u`）：
- * 同一个表出两条（带别名 / 不带别名）会让人在同一张表上犹豫 ——
- * 开启这个开关的意思就是「我要别名」，再摆一条不带的等于把选择又推回去。
- * 想要不带别名，把开关关掉即可（或插入后删掉 ` AS u`）。
- */
+/** 表补全项（表名一律带引用符，插入时吃掉用户已经敲下的开引号） */
 export function tableSuggestions(
   connId: number,
   database: string,
@@ -617,17 +519,7 @@ export function tableSuggestions(
   })
 }
 
-/**
- * 位置 → 关键字集合。
- *
- * | 位置          | 给什么                                                 |
- * | ------------- | ------------------------------------------------------ |
- * | `any`         | 全量（含 DDL）—— 新语句开头本来就要写这些               |
- * | `afterSource` | `AS` + 连接 + 子句，不给表达式关键字与 DDL              |
- * | `column`      | 表达式优先，其次连接 / 子句（写完条件接着写 WHERE 等）  |
- * | `source`      | 无 —— 表名位置只给表与库                               |
- * | `alias`       | 无 —— `AS` 之后只能写别名                              |
- */
+/** 位置 → 关键字集合 */
 export function keywordsFor(kind: ClauseKind): string[] {
   switch (kind) {
     case 'any':
@@ -641,12 +533,7 @@ export function keywordsFor(kind: ClauseKind): string[] {
   }
 }
 
-/**
- * 关键字权重：语句 → 表达式 → 子句，三层依次降低（层间距见 sqlCompletionKeywords）。
- *
- * 分层的意义只在「同前缀冲突」时可见（`FR` 同时命中 FROM 与 FROM_UNIXTIME 这类），
- * 层内先后仍由编辑器的匹配分决定。
- */
+/** 关键字权重：语句 → 表达式 → 子句，三层依次降低（层间距见 sqlCompletionKeywords） */
 export function keywordBoost(keyword: string): number {
   if (STATEMENT_KEYWORD_SET.has(keyword)) {
     return BOOST_STATEMENT_KEYWORD
@@ -656,12 +543,7 @@ export function keywordBoost(keyword: string): number {
 
 export const EXPRESSION_KEYWORD_SET = new Set(EXPRESSION_KEYWORDS)
 
-/**
- * 插入文本后自动触发下一轮补全。
- *
- * 用于「选完库名 / 别名后紧接着选表 / 字段」：插入后等一帧再 startCompletion，
- * 否则补全弹层刚被这次插入关掉，立刻重开会闪。
- */
+/** 插入文本后自动触发下一轮补全 */
 export function applyAndTrigger(insertText: string) {
   return (view: EditorView, _completion: Completion, from: number, to: number) => {
     view.dispatch({
@@ -672,16 +554,7 @@ export function applyAndTrigger(insertText: string) {
   }
 }
 
-/* ------------------------------------------------------------------ 候选族
- *
- * 「哪个族在什么位置出候选」过去是散在 generalSuggestions 里的守卫与提前返回：
- * 加一个族要在 160 行里找三处、改一处忘记另一处就出矛盾（表给了、库没给是常事）。
- * 现在每个族是一个对象：**自己声明 supports（什么时候轮到我）+ provide（给什么）**，
- * 顺序由注册表顺序决定。
- *
- * 好处是这些不变式可以被单独验证（见 sqlSuggestions.spec.ts 的「候选族注册表」），
- * 而不是只能通过「跑一次完整补全看候选列表」反推；换一套注册表就是另一套候选策略。
- */
+/* ------------------------------------------------------------ */
 
 /** 一次补全摊平后的上下文：每个候选族只读它，不各自去翻 args */
 export interface SuggestionContext {
@@ -707,12 +580,7 @@ export interface SuggestionContext {
   preferredQualifier: string
 }
 
-/**
- * 一个候选族。
- *
- * `supports` 只回答「位置对不对」，不回答「有没有数据」—— 拿不到元数据时
- * `provide` 返回空数组即可，这样「位置判断」与「数据可用性」不会互相纠缠。
- */
+/** 一个候选族 */
 export interface SuggestionProvider {
   /** 身份（调试与用例定位用，不给用户看） */
   id: string
@@ -724,10 +592,7 @@ export interface SuggestionProvider {
 export function suggestionContextOf(args: GeneralSuggestArgs): SuggestionContext {
   return {
     kind: args.intent.clause.kind,
-    /*
-     * 槽位：关键字集合与「表 / 库能不能出现」都按它算（见 completion/ 两个模块）。
-     * 调用方（sqlBundle）已经算好并传入；只关心位置的调用方可以不传，这里兜底重算。
-     */
+    /* 槽位：关键字集合与「表 / 库能不能出现」都按它算（见 completion/ 两个模块） */
     slot: args.slot ?? resolveCompletionSlot({
       kind: args.intent.kind,
       keyword: args.intent.clause.keyword,
@@ -747,13 +612,7 @@ export function suggestionContextOf(args: GeneralSuggestArgs): SuggestionContext
   }
 }
 
-/**
- * 列 + 别名（表达式位置的主力）。
- *
- * `scopes` 由内到外排列，按**分层遮蔽**收集：
- *  - `seenAliases`：内层出现同名来源（别名或表名）后，外层同名来源不再贡献列；
- *  - `seenColumns`：只做最终列名去重（不同来源的同名列只出一次）。
- */
+/** 列 + 别名（表达式位置的主力） */
 function columnCandidates(ctx: SuggestionContext): Completion[] {
   const { scopes, deps, skipColumns, preferredQualifier: preferred } = ctx
   const { connId, database, dialect, metadata } = deps
@@ -772,11 +631,7 @@ function columnCandidates(ctx: SuggestionContext): Completion[] {
       }
       seenAliases.add(sourceKey)
 
-      /*
-       * 列候选走候选池（按来源缓存 + 超宽表按前缀取舍）：
-       * 派生表用静态解析出的列，物理表用元数据；来源用「别名优先」的限定符，
-       * 于是 `FROM users u` 的列是 u.*，与派生表 / CTE 的行为一致。
-       */
+      /* 列候选走候选池（按来源缓存 + 超宽表按前缀取舍）： 派生表用静态解析出的列，物理表用元数据 */
       // 该来源的列是否带限定符：多来源一律带；多选列时前一项用的那个来源也带
       const qualified = (scopes[0] ?? []).length > 1
         || (preferred !== '' && source.toLowerCase() === preferred)
@@ -828,15 +683,7 @@ function columnCandidates(ctx: SuggestionContext): Completion[] {
   return suggestions
 }
 
-/**
- * 表名候选。
- *
- * 只在位置**真的进入下一个槽位**时才给（三种紧贴情形见 TightKind）：
- *  - 紧贴关键字本身（`FROM|`、`INTO|`）→ 不给：用户还在写这个词，
- *    此刻的库名（长词，fuzzy 能把 `FROM` 当子序列匹配上、boost 又是最高一档）
- *    会被顶到第一位，回车直接插成 `` `information_schema`. ``；
- *  - 紧贴的是正在输入的名字（`FROM or|`）→ 照给（`orders` 正是用户要的）。
- */
+/** 表名候选 */
 function tableCandidates(ctx: SuggestionContext): Completion[] {
   const { connId, database, dialect, metadata } = ctx.deps
   return tableSuggestions(connId, database, dialect, metadata, ctx.autoAlias)
@@ -849,12 +696,7 @@ function namespaceCandidates(ctx: SuggestionContext): Completion[] {
   return namespaceSuggestions(connId, dialect, metadata, ctx.flags.showSystemDatabases !== false)
 }
 
-/**
- * 关键字候选：按**槽位**过滤（而不是位置大类）。
- *
- * `SELECT |` 是 select-item-start，于是 FROM / WHERE / GROUP BY / ORDER BY 根本不会生成 ——
- * 这是「资格」而不是「排序」（见 completion/sqlCompletionEligibility.ts）。
- */
+/** 关键字候选：按**槽位**过滤（而不是位置大类） */
 function keywordCandidates(ctx: SuggestionContext): Completion[] {
   return keywordsForSlot({
     slot: ctx.slot,
@@ -878,22 +720,7 @@ function functionCandidates(): Completion[] {
   }))
 }
 
-/**
- * 表名与库名的**共同资格**。
- *
- * 两者时机本来就相同：`FROM ord|` 既可能是表 `orders`，也可能是库 `order_center`；
- * 选定库名后接着敲 `.` 还能展开它的表。所以用同一条判据，
- * 「这个位置该不该给表 / 库」交给槽位层（`isCandidateAllowed`）精确决定 ——
- * 表达式位置（WHERE / ON / SELECT / AS …）在那里就已经被拦掉了。
- *
- * 这里只排除一件事：**光标正紧贴着关键字本身**（`FROM|`、`INTO|`）。
- * 那时用户还在写这个词，此刻冒出来的长库名（fuzzy 能把 `FROM` 当子序列匹配上、
- * boost 又高）会被顶到第一位，回车直接插成 `` `information_schema`. ``。
- *
- * 曾经的写法是「库名比表名更保守：紧贴任何标识符就不给」——`tight` 描述的是
- * 「正在输入」，与「库名在这里有没有意义」不是一回事：`FROM d|` 正是在写表名，
- * 库名恰恰有用，于是库名在表位置整批消失（用户反馈的 bug）。
- */
+/** 表名与库名的**共同资格** */
 function supportsTableOrNamespace(ctx: SuggestionContext): boolean {
   return ctx.kind !== 'column' && ctx.kind !== 'alias' && ctx.tight !== 'keyword'
 }
@@ -933,13 +760,7 @@ const functionProvider: SuggestionProvider = {
   provide: functionCandidates,
 }
 
-/**
- * 默认注册表。
- *
- * 顺序 = 候选出现顺序：列（主力）→ 表 → 库 → 关键字 → 函数。
- * 同一个位置通常只有两三个族会说 supported，所以这个顺序不会互相盖住；
- * 真正的排列优先级由各自的 boost 决定（见 sqlCompletionRank）。
- */
+/** 默认注册表 */
 export const DEFAULT_SUGGESTION_PROVIDERS: SuggestionProvider[] = [
   columnProvider,
   tableProvider,
@@ -962,24 +783,12 @@ export function runSuggestionProviders(
   return out
 }
 
-/**
- * 非点号场景（Ctrl+Space / 输入中）按位置给候选：
- *  - `source`：**只给表与库**——表名还没写，这时冒 JOIN / WHERE 之类的关键字纯属干扰；
- *  - `afterSource`：表 + 库 + `AS` / JOIN / WHERE 等关键字；
- *  - `column`：列 → 别名 → 函数 → 关键字（表达式关键字在前，子句关键字在后）；
- *  - `alias`：**什么都不给**——`AS` 之后只能写别名；
- *  - `any`：表 + 库 + 全量关键字（含 DDL）。
- *
- * 这些规则现在都由候选族自己声明（见上面的注册表），这里只负责摊平上下文后开跑。
- */
+/** 非点号场景（Ctrl+Space / 输入中）按位置给候选： - `source`：**只给表与库**——表名还没写 */
 export function generalSuggestions(args: GeneralSuggestArgs): Completion[] {
   return runSuggestionProviders(suggestionContextOf(args))
 }
 
-/**
- * 库名候选的插入：吃掉用户已经敲下的开引号，插入 `` `db`. `` 并再弹一次
- * （接着就能选该库的表）。
- */
+/** 库名候选的插入：吃掉用户已经敲下的开引号，插入 `` `db` */
 export function namespaceApply(identifier: string) {
   return (view: EditorView, _completion: Completion, from: number, to: number) => {
     const open = openingQuoteBefore(view.state.doc.toString(), from)
@@ -998,16 +807,7 @@ export function namespaceSuggestions(
   metadata: MetadataProvider,
   showSystemDatabases = true,
 ): Completion[] {
-  /*
-   * 系统库按设置过滤（设置项关闭时不再主动列出）。
-   *
-   * 判定优先用**后端标记**（`databaseInfos`，适配层按方言给出）；提供者只给得出
-   * 名字时退回「名字 + 方言表」（见 sqlVisibility）。两条路径的结论必须一致，
-   * 所以过滤都收敛在 sqlVisibility 里，这里不自己判断。
-   *
-   * 注意只过滤**候选**：`mysql.user` 这类显式写法由 resolveAfterDot 解析，
-   * 那条路径不经过这里，因此隐藏设置不会让已有 SQL 失效。
-   */
+  /* 系统库按设置过滤（设置项关闭时不再主动列出） */
   const infos = metadata.databaseInfos?.(connId)
   const visible = infos
     ? filterDatabaseInfos(infos, dialect, showSystemDatabases)

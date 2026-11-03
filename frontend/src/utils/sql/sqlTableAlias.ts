@@ -1,18 +1,4 @@
-/**
- * 表名 → 自动别名（设置项 `sql_completion_alias` 开启时，补全表名顺手带上别名）。
- *
- * 取名规则（贴着手写习惯，且保证结果是合法标识符）：
- *  - 去掉常见表前缀 `t_` / `tb_` / `tbl_`：`t_user` 的别名按 `user` 派生，而不是 `tu`；
- *  - 多词（下划线 / 驼峰 / 空白分隔）取各词首字母，最多 3 个：
- *    `order_items` → `oi`、`sys_device_info` → `sdi`；
- *  - 单个 ASCII 词取首字母：`users` → `u`（与设置面板里的说明一致，也是手写 SQL 的习惯）；
- *  - 单个中文词取拼音首字母的前两位：`设备表` → `sb`
- *    （一个字母对中文表名几乎没区分度）；
- *  - 撞上保留字时补 `_t` 后缀，保证生成的别名不需要引用符。
- *
- * 注意：这里只看单张表名，不掌握同一语句里的其它表 —— 别名冲突留给使用者判断
- * （宁可给出直觉上对的短别名，也不要为了猜冲突退化成看不懂的长名字）。
- */
+/** 表名 → 自动别名（设置项 `sql_completion_alias` 开启时，补全表名顺手带上别名） */
 import { hasCjk, pinyinInitialsOf, wordInitialsOf } from './sqlCompletionRank'
 import { RESERVED_WORDS } from './sqlCompletionKeywords'
 
@@ -69,9 +55,7 @@ function sanitize(alias: string): string {
   return RESERVED_WORDS.has(named) ? `${named}_t` : named
 }
 
-/**
- * 由表名推导自动别名；推导不出（表名为空）时返回空串，调用方按「不给别名」处理。
- */
+/** 由表名推导自动别名；推导不出（表名为空）时返回空串，调用方按「不给别名」处理 */
 export function aliasForTable(table: string): string {
   const trimmed = table.trim()
   if (!trimmed) {
@@ -93,14 +77,7 @@ export function aliasForTable(table: string): string {
   return sanitize(alias)
 }
 
-/**
- * 表名 + 自动别名的插入文本。
- *
- * 显式写 `AS`：省略 AS 的写法虽然合法，但生成的 SQL 是给人读的 ——
- * `FROM users u` 这种一眼看过去分不清哪个是表名哪个是别名，`AS` 把意图写明白。
- *
- * 表名已按方言加引用符，别名是推导出来的纯标识符（保证不需要引用符）。
- */
+/** 表名 + 自动别名的插入文本 */
 export function aliasedTableText(quotedTable: string, alias: string): string {
   return alias ? `${quotedTable} AS ${alias}` : quotedTable
 }

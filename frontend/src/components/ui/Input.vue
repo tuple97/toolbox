@@ -1,17 +1,5 @@
 <script setup lang="ts">
-/**
- * 文本输入（替代 `el-input`）。
- *
- * 与既有 ui 组件同一约定：高度乘 `--app-control-scale`、字号用 Tailwind 阶梯、
- * 颜色只引用语义令牌 —— 四套主题与「缩放比例」自动跟随，组件里不出现硬编码色值。
- *
- * 两种形态：
- *  - 单行 `<input>`：可带前缀图标（搜索框）与清除按钮；
- *  - 多行 `<textarea>`（`rows` 控制初始高度，允许纵向拖拽 —— 写 SQL / JSON 时比固定高度好用）。
- *
- * 前缀图标与清除按钮走**绝对定位**而不是额外包裹层：`class` 落在最外层容器上，
- * 调用方给宽度（如 `w-[200px]`）时内外一起生效，不会出现「外框 200、输入框撑破」。
- */
+/** 文本输入（替代 `el-input`） */
 import { computed, ref } from 'vue'
 import { cn } from '@/lib/utils'
 import Icon from '@/components/ui/Icon.vue'

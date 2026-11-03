@@ -35,6 +35,36 @@
   --color-hover: var(--hover-bg);
   --color-active: var(--active-bg);
 
+  /*
+   * 品牌色/危险色之上的前景色。
+   *
+   * 四套配色的 --brand-color 色相各不相同（靛蓝 / 极夜蓝 / IDEA 橙 / 亮色靛蓝），
+   * 「填充块上的文字」这条路必须由 Token 决定，不能在组件里写死 text-white：
+   * 换到浅品牌色时白字会糊成一片。
+   */
+  --color-on-brand: oklch(1 0 0);
+
+  /*
+   * 不透明浮层底（右键菜单）。
+   *
+   * --menu-bg 早就在 global.css 里，但一直没进 Token 层，
+   * 于是 ContextMenu / Workbench 只能写 background: var(--menu-bg)，
+   * 和语义相近的 bg-overlay 分成两套写法。这里补上映射。
+   */
+  --color-menu: var(--menu-bg);
+
+  /* 模态遮罩：模态层压暗背景的唯一来源，避免组件里写 bg-[var(--app-mask)] */
+  --color-mask: var(--app-mask);
+
+  /*
+   * 危险色实心档：窗口关闭按钮这类「整块铺红」的场景。
+   *
+   * --danger-color 是浅色语义红（用于文字与描边），铺满整块会发灰、对比不足；
+   * 这里给一组固定色相的实心红，取值对齐 Windows 关闭按钮的观感。
+   */
+  --color-danger-strong: oklch(0.577 0.245 27.325);
+  --color-danger-strong-hover: oklch(0.505 0.213 27.518);
+
   /* ---------------------------------------------------------------- 间距 */
   /*
    * 间距用 rem：根字号 = 13px × 缩放比例（见下面的 @layer base），

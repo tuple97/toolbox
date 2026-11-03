@@ -1,20 +1,4 @@
-/**
- * 插件前端加载器。
- *
- * 加载流程：
- *   1. 从后端读取已安装插件，筛出「启用 + 已信任 + 兼容 + 有前端入口」的；
- *   2. 动态 import 插件的 ESM 产物（由 Wails 资产服务从磁盘提供服务）；
- *   3. 调用插件导出的 activate(api)，把宿主能力与共享 Vue 交给它；
- *   4. 插件在 activate 中通过 api.registerTool 注册界面。
- *
- * activate 可以返回 { deactivate }：宿主在「停用 / 卸载 / 重载」插件前
- * 会调用它，让插件释放自己持有的资源（事件订阅、定时器……）。
- * 通过 api.registerTool / registerSettingsPanel 登记的贡献由宿主统一回收，
- * 插件只需处理自己额外申请的东西。
- *
- * 单个插件加载失败只影响它自己（记录错误并继续），
- * 避免一个坏插件让整个工具箱不可用。
- */
+/** 插件前端加载器 */
 
 import { fetchAssetBase, fetchPlugins, readPluginAsset } from '@/api/plugins'
 import { createPluginApi, installSharedRuntime } from './hostApi'
@@ -26,12 +10,7 @@ import {
 } from './registry'
 import type { InstalledPlugin } from '@/types'
 
-/**
- * 插件返回的清理句柄。
- *
- * activate 返回它时，宿主会在插件停用前调用 deactivate，
- * 用来释放插件自己申请的资源（api.host.on 的取消函数等）。
- */
+/** 插件返回的清理句柄 */
 interface PluginDeactivation {
   deactivate: () => void | Promise<void>
 }
@@ -192,34 +171,14 @@ async function loadPlugin(plugin: InstalledPlugin): Promise<void> {
   }
 }
 
-/**
- * 插件入口的静态地址。
- *
- * 除版本号外再带一个「安装时间」令牌：插件资源由宿主以
- * `immutable, max-age=1y` 下发，浏览器还会按 URL 缓存 ESM 模块本身，
- * 因此只按 <version> 分段的话，同版本重装永远取不到新产物
- * （表现为「重装了插件但界面没变」）。
- *
- * 令牌取 updatedAt（每次重装/升级都会刷新，见后端 writeRecordLocked），
- * 缺失时回落到 installedAt。两者都拿不到就不带参数——
- * 此时按老行为走，至少不比改动前更差。
- */
+/** 插件入口的静态地址 */
 function pluginEntryUrl(plugin: InstalledPlugin, entry: string): string {
   const url = `${assetBase}${plugin.id}/${plugin.version}/${entry}`
   const token = plugin.updatedAt || plugin.installedAt
   return token ? `${url}?v=${encodeURIComponent(token)}` : url
 }
 
-/**
- * 取出插件的 ESM 模块。
- *
- * 优先用 `/plugins/<id>/<version>/...` 静态地址（生产模式下由 Wails
- * 资产服务直接从磁盘提供）。开发模式必须退回 Blob：
- * Wails 在 dev 时把窗口指向 Vite dev server，这类请求会被 Vite 接管
- * （404 或返回 index.html），根本拿不到插件的 JS。此时改走 IPC 读源码，
- * 再用 Blob URL 加载 —— 插件产物是单文件 ESM（构建时关闭了代码分割），
- * 没有相对导入，在 Blob 里可以正常求值。
- */
+/** 取出插件的 ESM 模块 */
 async function importPluginModule(plugin: InstalledPlugin, entry: string): Promise<PluginModule> {
   const url = pluginEntryUrl(plugin, entry)
 
@@ -251,14 +210,7 @@ async function importPluginModule(plugin: InstalledPlugin, entry: string): Promi
   }
 }
 
-/**
- * 校验插件产物引用的宿主内核模块是否都已注册。
- *
- * 构建期把 `@/xxx` 改写成了 `globalThis.__TOOLBOX_HOST__["@/xxx"]`。
- * 一旦宿主没有这个键（路径写法不一致、宿主版本过旧），运行时只会抛
- * 一句 `Cannot read properties of undefined (reading 'default')`，
- * 从报错里完全看不出缺了什么。这里提前把缺失的键名点出来。
- */
+/** 校验插件产物引用的宿主内核模块是否都已注册 */
 function assertHostModules(source: string): void {
   const host = (globalThis as Record<string, unknown>).__TOOLBOX_HOST__
   if (!host || typeof host !== 'object') {

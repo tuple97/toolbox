@@ -74,7 +74,7 @@ onBeforeUnmount(() => {
         class="app-dialog fixed inset-0 flex items-center justify-center p-6"
         :style="{ zIndex }"
       >
-        <div class="absolute inset-0 bg-[var(--app-mask)]" @click="closeOnMask && close()" />
+        <div class="absolute inset-0 bg-mask" @click="closeOnMask && close()" />
 
         <div
           class="app-dialog__panel relative z-10 flex max-h-[85vh] w-full flex-col overflow-hidden

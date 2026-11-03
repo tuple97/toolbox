@@ -59,7 +59,7 @@ type DBConnection struct {
 	IsProduction bool `json:"isProduction"`
 }
 
-// SQLTemplate 对应 sql_templates 表（Variables / FieldMappings / ExportTemplates 为 JSON 字符串）
+// SQLTemplate 对应 sql_templates 表（Variables / FieldMappings / E
 type SQLTemplate struct {
 	ID      int64  `json:"id"`
 	ConnID  int64  `json:"connId"`

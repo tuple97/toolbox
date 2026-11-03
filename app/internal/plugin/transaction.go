@@ -8,22 +8,7 @@ import (
 	"path/filepath"
 )
 
-/*
-安装事务。
-
-一次安装（单个插件或一批插件及其依赖）必须整体成功或整体失败：
-多个文件系统目录无法天然组成一个原子操作，因此这里用
-「事务日志 + 暂存区 + 备份目录」模拟一个适合本地桌面程序的原子提交：
-
-  1. 先把所有内容写入 plugin-staging/<txid>/，正式目录保持不动；
-  2. 写事务日志（先写日志再改正式目录，保证崩溃后可恢复）；
-  3. 逐个提交：把已存在的版本目录改名为备份，再把暂存目录改名为正式目录，
-     最后原子写入安装记录；
-  4. 标记日志为 committed，清理备份与暂存。
-
-崩溃后的恢复由 RecoverTransactions 完成：
-未标记 committed 的事务一律回滚到事务开始前的状态。
-*/
+/* 安装事务 */
 
 // 事务状态。
 const (
@@ -146,13 +131,7 @@ func (t *Transaction) Commit() error {
 
 	journal.State = txStateCommitted
 	if err := t.writeJournal(&journal); err != nil {
-		/*
-		 * 提交标记写不进去（磁盘满、权限问题等）。
-		 *
-		 * 此时文件已经就位，但日志仍是 pending —— 如果放任不管，下次启动会
-		 * 按 pending 回滚一个实际上已完成的安装。因此这里立即回滚：
-		 * 「报告失败」与「磁盘回到安装前」必须一致。
-		 */
+		/* 提交标记写不进去（磁盘满、权限问题等） */
 		slog.Error("标记事务已提交失败，改为回滚", "tx", t.id, "error", err)
 		return t.rollback(&journal, fmt.Errorf("标记事务已提交失败: %w", err))
 	}

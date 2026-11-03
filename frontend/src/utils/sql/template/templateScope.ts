@@ -1,15 +1,4 @@
-/**
- * 模板作用域。
- *
- * 模板里 `{{ . }}` 的含义由上下文决定：
- *  - `{{with 对象}}` 里指向那个对象；
- *  - `{{range 数组}}` 里指向当前元素；
- *  - `{{range $i, $v := 数组}}` 里 `$i` / `$v` 是局部变量，且 `$v` 也是当前元素。
- *
- * 这里把「到光标为止」的块链折叠成一条作用域链：内层优先、`$局部变量` 只在
- * 自己的块内可见。补全据此决定 `.` 与点的取值该给什么，而不是把所有模板变量
- * 一股脑塞进去。
- */
+/** 模板作用域 */
 import type { TemplateValueType } from './templateFunctions'
 import { parseTemplateDocument } from './templateParser'
 import type { TemplateBlockNode } from './templateParser'
@@ -59,13 +48,7 @@ function scopeOf(parent: TemplateScope | null, dot: TemplateSymbol | null = null
   return { symbols: new Map(), parent, dot }
 }
 
-/**
- * 折叠出光标处的作用域。
- *
- * @param text  模板文本（整段 SQL 也可以）
- * @param upTo  只解析到这个下标（通常是光标位置）
- * @param input 模板变量
- */
+/** 折叠出光标处的作用域 */
 export function buildTemplateScope(
   text: string,
   upTo: number,
@@ -75,12 +58,7 @@ export function buildTemplateScope(
   return scopeFromUnclosedBlocks(input, document.unclosedBlocks)
 }
 
-/**
- * 由「未闭合块链」折叠作用域。
- *
- * 补全路径上块链已经解析过了（上下文里带着），这里直接消费，
- * 不用为了作用域再把文档解析一遍。
- */
+/** 由「未闭合块链」折叠作用域 */
 export function scopeFromUnclosedBlocks(
   input: TemplateScopeInput,
   blocks: TemplateBlockNode[],
@@ -147,12 +125,7 @@ function enterBlock(
   return scope
 }
 
-/**
- * 查找符号：先本层，再逐层向上（模板的变量是词法作用域）。
- *
- * `target` 允许写成 `device`、`$v`、`device.name` 的链式写法，
- * 这里只看第一段。
- */
+/** 查找符号：先本层，再逐层向上（模板的变量是词法作用域） */
 export function lookupSymbol(scope: TemplateScope | null, target: string): TemplateSymbol | null {
   const head = target.trim().replace(/^\$/, '').split(/[.\s(]/)[0]
   if (!head) {
@@ -199,14 +172,7 @@ export function localSymbols(scope: TemplateScope | null): TemplateSymbol[] {
   return scopeSymbols(scope).filter(symbol => symbol.name.startsWith('$'))
 }
 
-/**
- * 解析点号取值该给什么候选。
- *
- * - `{{ .name| }}`（qualifier 为空）→ 当前 `.` 的属性；
- * - `{{ device.| }}`（qualifier 为 device）→ 该变量的属性；
- * - 拿不到属性信息时返回空数组：由调用方决定回退策略（宁可回退到变量列表，
- *   也不要凭空的属性名）。
- */
+/** 解析点号取值该给什么候选 */
 export function dotCandidates(
   scope: TemplateScope | null,
   qualifier: string,

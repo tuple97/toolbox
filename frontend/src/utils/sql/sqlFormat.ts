@@ -1,12 +1,4 @@
-/**
- * SQL 美化与压缩（编辑器操作行的「美化 / 压缩」按钮用）。
- *
- * 分工：
- *  - 美化：用 sql-formatter（方言感知，MySQL / PostgreSQL 各一套关键字与引号规则），
- *    关键字统一大写、两空格缩进；
- *  - 压缩：自己实现——只需正确跳过字符串与引号标识符，其余空白折叠成单个空格、
- *    注释直接丢弃即可，引库反而更重。
- */
+/** SQL 美化与压缩（编辑器操作行的「美化 / 压缩」按钮用） */
 import { format } from 'sql-formatter'
 import type { SqlDialect } from '@/utils/sql/rowSql'
 
@@ -20,10 +12,7 @@ export function formatSql(sql: string, dialect: SqlDialect): string {
   })
 }
 
-/**
- * 压缩 SQL：折叠多余空白、去掉注释。
- * 字符串字面量（'…'）、引号标识符（"…" / `…`）内部原样保留，转义按 SQL 习惯处理。
- */
+/** 压缩 SQL：折叠多余空白、去掉注释 */
 export function minifySql(sql: string): string {
   let out = ''
   /** 上一段是否遇到了空白（延迟到下一个实际字符前再补一个空格） */

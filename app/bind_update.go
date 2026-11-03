@@ -4,13 +4,7 @@ import (
 	"toolbox/app/internal/update"
 )
 
-/*
-更新相关的绑定：一律薄转发。
-
-真正的并发保护、生命周期（取消 / 重启）、发布策略（校验和强制、开发模式）
-与状态快照都在 app/internal/update.Controller 里；Wails 的 updater 只负责
-执行更新动作，不作为应用层状态机。
-*/
+/* 更新相关的绑定：一律薄转发 */
 
 // CheckUpdate 检查新版本。
 //

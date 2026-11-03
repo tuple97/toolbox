@@ -1,13 +1,4 @@
-/**
- * 表的索引信息（表结构卡片底部的「索引」区块用）。
- *
- * 走 executeStatement 直查数据字典，与主键反查（rowSql.fetchPrimaryKeys）同一套路：
- * 不新增后端绑定（新增绑定要重跑 wails3 generate bindings，收益不成比例），
- * 结果在模块内缓存 —— 卡片反复打开不会反复打库。
- *
- * 拿不到（方言不支持 / 权限不足）就返回空数组：索引是展示增强，
- * 失败不该影响卡片的其余部分。
- */
+/** 表的索引信息（表结构卡片底部的「索引」区块用） */
 import { executeStatement } from '@/api/executor'
 import { dialectOf } from './rowSql'
 

@@ -216,6 +216,14 @@ export class InstallPreview {
              */
             this["pendingDownloads"] = 0;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * Container 选中的是「容器目录」时的提示：它不是可安装的包，应该登记成插件源
+             * @member
+             * @type {LocalContainer | null | undefined}
+             */
+            this["container"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -230,6 +238,7 @@ export class InstallPreview {
         const $$createField3_0 = $$createType3;
         const $$createField4_0 = $$createType4;
         const $$createField7_0 = $$createType4;
+        const $$createField9_0 = $$createType6;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("packages" in $$parsedSource) {
             $$parsedSource["packages"] = $$createField2_0($$parsedSource["packages"]);
@@ -242,6 +251,9 @@ export class InstallPreview {
         }
         if ("addedPermissions" in $$parsedSource) {
             $$parsedSource["addedPermissions"] = $$createField7_0($$parsedSource["addedPermissions"]);
+        }
+        if ("container" in $$parsedSource) {
+            $$parsedSource["container"] = $$createField9_0($$parsedSource["container"]);
         }
         return new InstallPreview(/** @type {Partial<InstallPreview>} */($$parsedSource));
     }
@@ -577,16 +589,16 @@ export class InstalledInfo {
         const $$createField20_0 = $$createType4;
         const $$createField24_0 = $$createType4;
         const $$createField25_0 = $$createType4;
-        const $$createField26_0 = $$createType6;
-        const $$createField27_0 = $$createType8;
-        const $$createField29_0 = $$createType10;
-        const $$createField30_0 = $$createType12;
-        const $$createField31_0 = $$createType14;
-        const $$createField32_0 = $$createType16;
-        const $$createField33_0 = $$createType18;
-        const $$createField34_0 = $$createType20;
-        const $$createField35_0 = $$createType21;
-        const $$createField36_0 = $$createType22;
+        const $$createField26_0 = $$createType8;
+        const $$createField27_0 = $$createType10;
+        const $$createField29_0 = $$createType12;
+        const $$createField30_0 = $$createType14;
+        const $$createField31_0 = $$createType16;
+        const $$createField32_0 = $$createType18;
+        const $$createField33_0 = $$createType20;
+        const $$createField34_0 = $$createType22;
+        const $$createField35_0 = $$createType23;
+        const $$createField36_0 = $$createType24;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("handlers" in $$parsedSource) {
             $$parsedSource["handlers"] = $$createField19_0($$parsedSource["handlers"]);
@@ -631,6 +643,49 @@ export class InstalledInfo {
             $$parsedSource["runtime"] = $$createField36_0($$parsedSource["runtime"]);
         }
         return new InstalledInfo(/** @type {Partial<InstalledInfo>} */($$parsedSource));
+    }
+}
+
+/**
+ * LocalContainer 容器目录的信息。
+ * 
+ * 容器目录指项目根目录或它的 plugins 目录：本身不是插件，下面才是。
+ * 界面拿到它应当把该目录登记为本地插件源，而不是逐个安装。
+ */
+export class LocalContainer {
+    /**
+     * Creates a new LocalContainer instance.
+     * @param {Partial<LocalContainer>} [$$source = {}] - The source object to create the LocalContainer.
+     */
+    constructor($$source = {}) {
+        if (!("path" in $$source)) {
+            /**
+             * Path 目录绝对路径
+             * @member
+             * @type {string}
+             */
+            this["path"] = "";
+        }
+        if (!("count" in $$source)) {
+            /**
+             * Count 目录下发现的插件数量
+             * @member
+             * @type {number}
+             */
+            this["count"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new LocalContainer instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {LocalContainer}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new LocalContainer(/** @type {Partial<LocalContainer>} */($$parsedSource));
     }
 }
 
@@ -916,8 +971,8 @@ export class MarketplaceSnapshot {
      * @returns {MarketplaceSnapshot}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType24;
-        const $$createField4_0 = $$createType26;
+        const $$createField1_0 = $$createType26;
+        const $$createField4_0 = $$createType28;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("sources" in $$parsedSource) {
             $$parsedSource["sources"] = $$createField1_0($$parsedSource["sources"]);
@@ -1291,7 +1346,7 @@ export class PackagePreview {
     static createFrom($$source = {}) {
         const $$createField14_0 = $$createType4;
         const $$createField15_0 = $$createType4;
-        const $$createField16_0 = $$createType6;
+        const $$createField16_0 = $$createType8;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("permissions" in $$parsedSource) {
             $$parsedSource["permissions"] = $$createField14_0($$parsedSource["permissions"]);
@@ -1641,7 +1696,7 @@ export class SettingContribution {
      * @returns {SettingContribution}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType28;
+        const $$createField5_0 = $$createType30;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("options" in $$parsedSource) {
             $$parsedSource["options"] = $$createField5_0($$parsedSource["options"]);
@@ -1996,27 +2051,29 @@ const $$createType1 = $Create.Array($$createType0);
 const $$createType2 = PlanItem.createFrom;
 const $$createType3 = $Create.Array($$createType2);
 const $$createType4 = $Create.Array($Create.Any);
-const $$createType5 = DependencyRef.createFrom;
-const $$createType6 = $Create.Array($$createType5);
-const $$createType7 = MissingDependency.createFrom;
+const $$createType5 = LocalContainer.createFrom;
+const $$createType6 = $Create.Nullable($$createType5);
+const $$createType7 = DependencyRef.createFrom;
 const $$createType8 = $Create.Array($$createType7);
-const $$createType9 = SidebarGroup.createFrom;
+const $$createType9 = MissingDependency.createFrom;
 const $$createType10 = $Create.Array($$createType9);
-const $$createType11 = ToolContribution.createFrom;
+const $$createType11 = SidebarGroup.createFrom;
 const $$createType12 = $Create.Array($$createType11);
-const $$createType13 = CommandContribution.createFrom;
+const $$createType13 = ToolContribution.createFrom;
 const $$createType14 = $Create.Array($$createType13);
-const $$createType15 = SettingContribution.createFrom;
+const $$createType15 = CommandContribution.createFrom;
 const $$createType16 = $Create.Array($$createType15);
-const $$createType17 = SettingsPanelContribution.createFrom;
+const $$createType17 = SettingContribution.createFrom;
 const $$createType18 = $Create.Array($$createType17);
-const $$createType19 = MCPToolContribution.createFrom;
+const $$createType19 = SettingsPanelContribution.createFrom;
 const $$createType20 = $Create.Array($$createType19);
-const $$createType21 = Engines.createFrom;
-const $$createType22 = RuntimeSpec.createFrom;
-const $$createType23 = MarketplaceSource.createFrom;
-const $$createType24 = $Create.Array($$createType23);
-const $$createType25 = MarketplaceItem.createFrom;
+const $$createType21 = MCPToolContribution.createFrom;
+const $$createType22 = $Create.Array($$createType21);
+const $$createType23 = Engines.createFrom;
+const $$createType24 = RuntimeSpec.createFrom;
+const $$createType25 = MarketplaceSource.createFrom;
 const $$createType26 = $Create.Array($$createType25);
-const $$createType27 = SettingOption.createFrom;
+const $$createType27 = MarketplaceItem.createFrom;
 const $$createType28 = $Create.Array($$createType27);
+const $$createType29 = SettingOption.createFrom;
+const $$createType30 = $Create.Array($$createType29);

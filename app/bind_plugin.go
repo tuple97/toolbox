@@ -28,19 +28,7 @@ func decodeArchive(contentBase64 string) ([]byte, error) {
 	return decoded, nil
 }
 
-/*
-插件相关的绑定：一律薄转发到 internal/plugin.Manager。
-
-为什么插件后端调用不走「每个插件一套绑定方法」：
-Wails 的方法绑定发生在编译期，插件是运行期才安装的，
-因此所有插件调用统一收敛到 PluginInvoke 这一个网关，
-由管理器按插件标识分发到对应运行时。
-
-为什么安装只有一个 Preview + 一个 Install：
-在线市场安装、URL 安装、本地 ZIP、本地目录、多包批量安装全部复用同一套
-「读取包 → 求解闭包 → 生成计划 → 事务提交」流程。前端不再逐个调用安装接口，
-否则批量包之间的相互依赖无法在一次求解里处理。
-*/
+/* 插件相关的绑定：一律薄转发到 internal/plugin.Manager */
 
 // pluginReady 返回可用的插件管理器。
 func (a *App) pluginReady() (*plugin.Manager, error) {
@@ -119,6 +107,37 @@ func (a *App) PluginReadAsset(id string, version string, path string) (string, e
 		return "", err
 	}
 	return mgr.ReadAssetText(id, version, path)
+}
+
+// PluginDeveloperMode 报告开发者模式是否开启。
+//
+// 界面据此决定是否给出「从源码目录安装」入口；查不到管理器时一律按关闭处理。
+func (a *App) PluginDeveloperMode() bool {
+	if a.plugins == nil {
+		return false
+	}
+	return a.plugins.DeveloperMode()
+}
+
+// PluginSetDeveloperMode 开关开发者模式并持久化。
+//
+// 开启后：允许从插件源码目录安装，且不再要求确认来源信任。
+// 关闭后：只接受已编译产物（在线市场、离线包、下载地址）。
+func (a *App) PluginSetDeveloperMode(enabled bool) error {
+	if a.plugins != nil {
+		a.plugins.SetDeveloperMode(enabled)
+	}
+	if a.settings == nil {
+		return nil
+	}
+	value := "false"
+	if enabled {
+		value = "true"
+	}
+	if err := a.settings.Save(settingKeyDeveloperMode, value); err != nil {
+		return fmt.Errorf("开发者模式已切换，但保存到本地配置失败: %w", err)
+	}
+	return nil
 }
 
 // PluginOpenFolder 用系统文件管理器打开插件当前版本的安装目录。

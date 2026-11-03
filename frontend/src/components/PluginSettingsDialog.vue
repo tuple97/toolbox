@@ -1,14 +1,5 @@
 <script setup lang="ts">
-/**
- * 插件设置弹窗。
- *
- * 插件的设置项原本内嵌在工具箱设置页里，与工具箱自身的设置混在同一个页签列表；
- * 现在改成由插件卡片右键菜单的「配置」打开，弹窗只渲染这一个插件的设置面板，
- * 工具箱设置页只保留工具箱自己的设置。
- *
- * 面板来自插件运行期注册表：声明式配置项由宿主按 type 渲染成表单，
- * 插件自带的自定义组件则优先渲染；两种形式的值都存后端 plugin_settings 表。
- */
+/** 插件设置弹窗 */
 
 import { computed, ref, watch } from 'vue'
 import Button from '@/components/ui/Button.vue'

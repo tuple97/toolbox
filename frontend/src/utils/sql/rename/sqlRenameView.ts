@@ -1,21 +1,4 @@
-/**
- * 表别名重命名的 CodeMirror 接线。
- *
- * 逻辑全在 `sqlRenameSession.ts`（纯函数），这里只负责「编辑器语义」：
- *
- *  - **会话是独立状态**：`StateField` 持有 `SqlRenameSession`，声明范围随编辑映射
- *    （输入变长变短都跟得住）；文档被整体替换等失真情况直接结束会话；
- *  - **装饰**：声明处高亮（`.cm-rename-active`），一眼看出正在重命名；
- *  - **按键**：Enter 提交、Esc 取消、Ctrl/Cmd+A 只选中别名本身（不选中全文），
- *    其余按键（方向键 / 退格 / 删除 / 输入）一律交给 CodeMirror，不做特殊处理；
- *  - **光标离开声明范围**（点击别处、方向键走开）→ 立刻取消并还原；
- *  - **Undo 语义**：提交前先把声明恢复成进入会话时的原文（这一步不进历史），
- *    再一次性应用「声明 + 全部引用」的改动 —— 于是这次提交本身就是
- *    「原文 → 新名字」的完整一步，**一次 Ctrl+Z 就能全量还原**；
- *  - **取消不污染历史**：还原事务带 `addToHistory: false`。
- *
- * 会话期间不弹补全（Enter 必须归重命名），由调用方（CodeEditor）在候选源里挡掉。
- */
+/** 表别名重命名的 CodeMirror 接线 */
 import { closeCompletion } from '@codemirror/autocomplete'
 import { Prec, StateEffect, StateField, Transaction } from '@codemirror/state'
 import type { EditorState, Extension } from '@codemirror/state'
@@ -58,11 +41,7 @@ export interface RenameNotice {
 
 /** 接线选项 */
 export interface SqlRenameViewOptions {
-  /**
-   * 运行期上下文（连接 / 方言 / 元数据），与补全同源。
-   *
-   * 传 view 是因为上下文要在每次调用时现读（切连接、切库后立即生效）。
-   */
+  /** 运行期上下文（连接 / 方言 / 元数据），与补全同源 */
   runtime: (view: EditorView) => CompletionRuntime
   /** 提示出口；不传则静默 */
   notify?: (notice: RenameNotice) => void
@@ -109,12 +88,7 @@ const renameSessionField = StateField.define<SqlRenameSession | null>({
     : Decoration.none)),
 })
 
-/**
- * 提交：Enter。
- *
- * 返回 true 表示这次 Enter 已被重命名消费（无论是否真的改名成功），
- * 这样补全 / 换行都不会再抢走它。
- */
+/** 提交：Enter */
 function commitRename(view: EditorView, options: SqlRenameViewOptions): boolean {
   const session = sessionOf(view.state)
   if (!session) {
@@ -132,11 +106,7 @@ function commitRename(view: EditorView, options: SqlRenameViewOptions): boolean 
     return true
   }
 
-  /*
-   * 先把声明恢复成原文（不进历史）：这一步让「提交」变成一个自洽的
-   * 「原文 → 新名字」事务，撤销一次即全量还原；两个 dispatch 在同一个
-   * 同步任务里完成，界面不会看到中间态。
-   */
+  /* 先把声明恢复成原文（不进历史）：这一步让「提交」变成一个自洽的 「原文 → 新名字」事务，撤销一次即全量还原 */
   if (typed !== session.initialDeclaration) {
     view.dispatch({
       changes: {
@@ -184,12 +154,7 @@ function cancelRename(view: EditorView, options: SqlRenameViewOptions, silent = 
   return true
 }
 
-/**
- * 重命名扩展：状态 + 装饰 + 按键 + 光标守护。
- *
- * 按键用 `Prec.highest`：补全的 Enter / Esc 是同一优先级注册的，
- * 重命名必须赢，否则「输入别名后按 Enter」会被补全截走。
- */
+/** 重命名扩展：状态 + 装饰 + 按键 + 光标守护 */
 export function sqlRenameExtension(options: SqlRenameViewOptions): Extension {
   return [
     renameSessionField,
@@ -228,14 +193,7 @@ export function sqlRenameExtension(options: SqlRenameViewOptions): Extension {
   ]
 }
 
-/**
- * 位置 → 可重命名目标。
- *
- * 顺序是「表别名 → CTE 名称 → 列别名」：前者总是更具体的答案
- * （`FROM recent r` 的 `r` 是别名，`recent` 才是 CTE 名）。
- * 列别名还要过一遍**准入判断**（与来源列不重名，见 sqlColumnAlias），
- * 所以这里可能返回「是列别名，但不能改」的拒绝理由。
- */
+/** 位置 → 可重命名目标 */
 function resolveRenameTarget(
   view: EditorView,
   pos: number,
@@ -285,12 +243,7 @@ function resolveRenameTarget(
   return { ok: true, kind: plan.symbol.kind, symbol: plan.symbol, references: plan.references }
 }
 
-/**
- * 该位置可重命名的对象类型（界面标签用）。
- *
- * 与 `startRenameAt` 共用同一套判定：菜单说「有」就必须真的能改，
- * 菜单说「没有」就一个动作都不给 —— 两处口径分开是这类功能最容易出的毛病。
- */
+/** 该位置可重命名的对象类型（界面标签用） */
 export function renameTargetAt(
   view: EditorView,
   pos: number,
@@ -300,12 +253,7 @@ export function renameTargetAt(
   return resolved.ok ? resolved.kind : null
 }
 
-/**
- * 在指定位置开始重命名（右键菜单入口）。
- *
- * 解析不到目标（或列别名有歧义）就不给功能，并把原因说清楚 ——
- * 宁可不做，也不能改错 SQL。
- */
+/** 在指定位置开始重命名（右键菜单入口） */
 export function startRenameAt(
   view: EditorView,
   pos: number,
